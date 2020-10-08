@@ -9,7 +9,7 @@
     If not configured you can do this in the GUI.
     Default, the value "userParameters" will be used.
 .PARAMETER GatewayURI
-    (Optional) Pre-set the Gareway URI.
+    (Optional) Pre-set the Gateway URI.
     If not configured you can do this in the GUI.
 .PARAMETER QRSize
     The size for height and width for the generated QR image in pixels.
@@ -19,10 +19,10 @@
     Run the script with no parameters
 .EXAMPLE
     .\OTP4ADC.ps1 -attribute "extensionAttribute1" -GatewayURI "gw.domain.com"
-    Run the script and use "extensionAttribute1" and "gw.domain.com" as Gateway URI
+    Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v0.1.1
+    Version   : v0.1.2
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -278,7 +278,7 @@ function Search-User {
     )
     Write-Verbose "Function: Search-User"
     try {
-        $Results = Get-ADUser -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))" -Properties @($Attribute) | ForEach { 
+        $Results = Get-ADUser -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))" -Properties @($Attribute) | ForEach-Object {
             $Username = $_.SamAccountName
             [PSCustomObject]@{
                 SamAccountName    = $Username
@@ -385,7 +385,7 @@ function Execute-SearchADUser {
         $result = [System.Windows.MessageBox]::Show("The Username field is empty!", "Username Empty", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     } else {
         $Results = Search-User -Name $WPFControl_tbUsername.Text
-        $WPFControl_lvUsernames.ItemsSource = $Results 
+        $WPFControl_lvUsernames.ItemsSource = @($Results)
     }
 }
 
@@ -434,7 +434,7 @@ Set-PSRepository -Name "PSGallery" -InstallationPolicy Untrusted -ErrorAction Si
             Import-Module -Name QRCodeGenerator -Verbose:$False -ErrorAction Stop
             $Script:QRGeneration = $true
         } else {
-            if (-Not (Get-PackageProvider -ListAvailable -Name NuGet -ErrorAction SilentlyContinue | Where Version -ge ([Version]"2.8.5.201"))) {
+            if (-Not (Get-PackageProvider -ListAvailable -Name NuGet -ErrorAction SilentlyContinue | Where-Object Version -ge ([Version]"2.8.5.201"))) {
                 Write-Verbose "Trying to install NuGet PackageProvider"
                 try {
                     Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction Stop | Out-Null
