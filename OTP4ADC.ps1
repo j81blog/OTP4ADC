@@ -22,7 +22,7 @@
     Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v0.2.0
+    Version   : v0.2.1
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -436,6 +436,10 @@ function Execute-SearchADUser {
     } else {
         $Results = Search-User -Name $WPFControl_tbUsername.Text
         $WPFControl_lvUsernames.ItemsSource = @($Results)
+        Write-Verbose
+        if ($WPFControl_lvUsernames.Items.Count -eq 1) {
+            $WPFControl_lvUsernames.SelectedIndex = 0
+        }
     }
 }
 
