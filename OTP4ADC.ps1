@@ -22,7 +22,7 @@
     Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v0.2.2
+    Version   : v0.3.0
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -127,12 +127,12 @@ $($URI.AbsoluteUri)
     
 }
 
-function Generate-OTPSecret {
+function Get-OTPSecret {
     [cmdletbinding()]
     param(
         [Int]$Length = 26
     )
-    Write-Verbose "Function: Generate-OTPSecret"
+    Write-Verbose "Function: Get-OTPSecret"
     #https://support.yubico.com/support/solutions/articles/15000034367-generating-base32-string-examples
     $RNGCrypto = [Security.Cryptography.RNGCryptoServiceProvider]::Create()
     [Byte[]]$x = 1
@@ -150,6 +150,7 @@ function Convert-B32toByte {
         [Parameter(Mandatory = $true)]
         [String]$Value
     )
+    Write-Verbose "Function: Convert-B32toByte"
     $Base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
     $Binary = ""
     $CharacterArray = $Value.ToUpper().ToCharArray()
@@ -173,6 +174,7 @@ function Get-OTPToken {
         # OTP time window in seconds
         [Int]$TimeWindow = 30 
     )
+    Write-Verbose "Function: Get-OTPToken"
     #Unix epoch time in UTC
     $EpochTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $KeyedHashAlgorithm = New-Object -TypeName "System.Security.Cryptography.HMACSHA1"
@@ -220,16 +222,16 @@ function Save-File {
     return $OpenFileDialog.filename
 } 
 
-function Extract-Attribute {
+function ConvertFrom-Attribute {
     [CmdLetBinding()]
     [OutputType('PSCustomObject')]
     param(
         [String]$Data
     )
-    Write-Verbose "Function: Extract-Attribute"
+    Write-Verbose "Function: ConvertFrom-Attribute"
 
     if ($Data.Length -gt 2) {
-        $Result = $Data.Substring(2).Split(',') | ForEach { [PSCustomObject]@{
+        $Result = $Data.Substring(2).Split(',') | ForEach-Object { [PSCustomObject]@{
                 DeviceName = $($_.Split('=')[0])
                 Secret     = $(($_.Replace('&', '').Split('=')[1]))
             } } | Where-Object { $_.Secret } | Sort-Object DeviceName
@@ -239,10 +241,10 @@ function Extract-Attribute {
 
 function Initialize-GUI {
     Write-Verbose "Function: Initialize-GUI"
-    $Form.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterScreen
-    $WPFControl_tbAttribute.Text = $Attribute
+    $SyncHash.Form.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterScreen
+    $SyncHash.WPFControl_tbAttribute.Text = $Attribute
     $Script:OTPDevices = [PSCustomObject]@()
-    $Script:DeviceSecrets = [PSCustomObject]@()
+    $SyncHash.DeviceSecrets = [PSCustomObject]@()
     Reset-GUIForm
 }
 
@@ -250,34 +252,34 @@ function Update-Gui {
     #Fixes the "freeze" problem
     Write-Verbose "Function: Update-Gui"
     # Basically WinForms Application.DoEvents()
-    try { $App.Dispatcher.Invoke([Windows.Threading.DispatcherPriority]::Background, [action] { }) } catch { }
+    try { $SyncHash.App.Dispatcher.Invoke([Windows.Threading.DispatcherPriority]::Background, [action] { }) } catch { }
 }
 
-function Clean-GUIQRImage {
-    Write-Verbose "Function: Clean-GUIQRImage"
-    if ($WPFControl_btnGenerateQR.IsEnabled) { $WPFControl_btnGenerateQR.IsEnabled = $false }
-    if ($WPFControl_btnExportQR.IsEnabled) { $WPFControl_btnExportQR.IsEnabled = $false }
-    $WPFControl_ImgQR.Source = $null
-    #$WPFControl_ImgQR.Visibility = [System.Windows.Visibility]::Hidden
-    if ($QRGeneration) { $WPFControl_lblQR.Content = "" }
+function Invoke-CleanGUIQRImage {
+    Write-Verbose "Function: Invoke-CleanGUIQRImage"
+    if ($SyncHash.WPFControl_btnGenerateQR.IsEnabled) { $SyncHash.WPFControl_btnGenerateQR.IsEnabled = $false }
+    if ($SyncHash.WPFControl_btnExportQR.IsEnabled) { $SyncHash.WPFControl_btnExportQR.IsEnabled = $false }
+    $SyncHash.WPFControl_ImgQR.Source = $null
+    #$SyncHash.WPFControl_ImgQR.Visibility = [System.Windows.Visibility]::Hidden
+    if ($QRGeneration) { $SyncHash.WPFControl_lblQR.Content = "" }
     $Script:QRImage = $null
-    Validate-GenerateQR
-    Validate-AddSecret
+    Invoke-ValidateGUIQR
+    Invoke-ValidateAddSecret
 }
 
-function Load-QR {
-    Write-Verbose "Function: Load-QR"
-    Clean-GUIQRImage
-    $WPFControl_lblQR.Content = "Loading QR..."
+function Get-GUIQRImage {
+    Write-Verbose "Function: Get-GUIQRImage"
+    Invoke-CleanGUIQRImage
+    $SyncHash.WPFControl_lblQR.Content = "Loading QR..."
 
 }
 
 function Show-QR {
     Write-Verbose "Function: Show-QR"
-    #$WPFControl_ImgQR.Visibility = [System.Windows.Visibility]::Visible
-    $WPFControl_lblQR.Content = ""
-    if (-Not $WPFControl_btnExportQR.IsEnabled) { $WPFControl_btnExportQR.IsEnabled = $true }
-    $WPFControl_btnExportQR.Focus() | Out-Null
+    #$SyncHash.WPFControl_ImgQR.Visibility = [System.Windows.Visibility]::Visible
+    $SyncHash.WPFControl_lblQR.Content = ""
+    if (-Not $SyncHash.WPFControl_btnExportQR.IsEnabled) { $SyncHash.WPFControl_btnExportQR.IsEnabled = $true }
+    $SyncHash.WPFControl_btnExportQR.Focus() | Out-Null
 }
 
 function Search-User {
@@ -287,7 +289,7 @@ function Search-User {
         [ValidateNotNullOrEmpty()]
         [String]$Name,
         
-        [String]$Attribute = $Script:Attribute
+        [String]$Attribute = $SyncHash.Attribute
     )
     Write-Verbose "Function: Search-User"
     try {
@@ -304,14 +306,14 @@ function Search-User {
                 NetBIOSName       = (Get-ADDomain).NetBIOSName | Where-Object { (Get-ADUser $Username) }
             } }
     } catch {
-        $MBResult = [System.Windows.MessageBox]::Show("$($_.Exception.Message)", "Error!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+        $null = [System.Windows.MessageBox]::Show("$($_.Exception.Message)", "Error!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     }
     return $Results 
 }
 
-function Clean-GUIUser {
-    Write-Verbose "Function: Clean-GUIUser"
-    if ($Script:Saved) {
+function Invoke-CleanGUIUser {
+    Write-Verbose "Function: Invoke-CleanGUIUser"
+    if ($SyncHash.Saved) {
         $Continue = $true
     } else {
         $result = [System.Windows.MessageBox]::Show("There are unsaved changes!`nDo you want to continue and loose the made changes?", "Unsaved changes", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Exclamation)
@@ -323,75 +325,78 @@ function Clean-GUIUser {
         
     }
     if ($Continue) {
-        $WPFControl_lvUsernames.ItemsSource = $null
-        $WPFControl_tbUsername.Text = ""
-        $WPFControl_lvOtps.ItemsSource = $null
-        if ($WPFControl_btnDeleteOtp.IsEnabled) { $WPFControl_btnDeleteOtp.IsEnabled = $false }
-        if ($WPFControl_btnLoadOtp.IsEnabled) { $WPFControl_btnLoadOtp.IsEnabled = $false }
-        if ($WPFControl_btnSaveOtp.IsEnabled) { $WPFControl_btnSaveOtp.IsEnabled = $false }
-        if ($WPFControl_btnExportPosh.IsEnabled) { $WPFControl_btnExportPosh.IsEnabled = $false }
-        $Script:Saved = $true
-        Clean-GUIQR
-        Clean-TOTPToken
+        $SyncHash.WPFControl_lvUsernames.ItemsSource = $null
+        $SyncHash.WPFControl_tbUsername.Text = ""
+        $SyncHash.WPFControl_lvOtps.ItemsSource = $null
+        if ($SyncHash.WPFControl_btnDeleteOtp.IsEnabled) { $SyncHash.WPFControl_btnDeleteOtp.IsEnabled = $false }
+        if ($SyncHash.WPFControl_btnLoadOtp.IsEnabled) { $SyncHash.WPFControl_btnLoadOtp.IsEnabled = $false }
+        if ($SyncHash.WPFControl_btnSaveOtp.IsEnabled) { $SyncHash.WPFControl_btnSaveOtp.IsEnabled = $false }
+        if ($SyncHash.WPFControl_btnExportPosh.IsEnabled) { $SyncHash.WPFControl_btnExportPosh.IsEnabled = $false }
+        $SyncHash.Saved = $true
+        Invoke-CleanGUIQR
+        Invoke-CleanTOTPToken
     }
 }
 
-function Clean-TOTPToken {
-    if ($WPFControl_gbToken.IsEnabled) { $WPFControl_gbToken.IsEnabled = $false }
-    $WPFControl_tbTOTPToken.Text = "------"
-    $WPFControl_pbTOTPToken.Value = 0
+function Invoke-CleanTOTPToken {
+    $SyncHash.OTPUpdate = $False
+    $SyncHash.OTPToken = $null
+    try { $PoSH.EndInvoke($handle) } catch { }
+    if ($SyncHash.WPFControl_gbToken.IsEnabled) { $SyncHash.WPFControl_gbToken.IsEnabled = $false }
+    $SyncHash.WPFControl_tbTOTPToken.Text = "------"
+    $SyncHash.WPFControl_pbTOTPToken.Value = 0
 }
 
-function Clean-GUIQR {
-    Write-Verbose "Function: Clean-GUIQR"
-    $WPFControl_tbSecret.Text = ""
-    $WPFControl_tbDeviceName.Text = ""
-    $WPFControl_tbGateway.Text = $GatewayURI
-    if ($WPFControl_btnAddQR.IsEnabled) { $WPFControl_btnAddQR.IsEnabled = $false }
-    Clean-GUIQRImage
+function Invoke-CleanGUIQR {
+    Write-Verbose "Function: Invoke-CleanGUIQR"
+    $SyncHash.WPFControl_tbSecret.Text = ""
+    $SyncHash.WPFControl_tbDeviceName.Text = ""
+    $SyncHash.WPFControl_tbGateway.Text = $GatewayURI
+    if ($SyncHash.WPFControl_btnAddQR.IsEnabled) { $SyncHash.WPFControl_btnAddQR.IsEnabled = $false }
+    Invoke-CleanGUIQRImage
 }
 
 function Reset-GUIForm {
     [CmdLetBinding()]
     param()
     Write-Verbose "Function: Reset-GUIForm"
-    Clean-GUIUser
-    $WPFControl_tbUsername.Focus() | Out-Null
+    Invoke-CleanGUIUser
+    $SyncHash.WPFControl_tbUsername.Focus() | Out-Null
 }
 
 function Save-OtpToUser {
     Write-Verbose "Function: Save-OtpToUser"
-    $SelectedUser = $WPFControl_lvUsernames.SelectedItem
+    $SelectedUser = $SyncHash.WPFControl_lvUsernames.SelectedItem
     $DistinguishedName = $SelectedUser.DistinguishedName
-    if ($Script:DeviceSecrets.Count -gt 0) {
+    if ($SyncHash.DeviceSecrets.Count -gt 0) {
         $NewOTP = @()
-        ForEach ($Item in $Script:DeviceSecrets) {
+        ForEach ($Item in $SyncHash.DeviceSecrets) {
             $NewOTP += "{0}={1}" -f $Item.DeviceName, $Item.Secret
         }
         $NewOTPString = "#@$($NewOTP -Join '&,')&,"
         Write-Verbose "New OTP AD User String: `"$NewOTPString`""
-        #$DeviceName = $WPFControl_tbDeviceName.text
+        #$DeviceName = $SyncHash.WPFControl_tbDeviceName.text
         Set-ADUser -Identity $DistinguishedName -Replace @{ "$Attribute" = $NewOTPString }
     } else {
         Write-Verbose "No OTP for user, save empty string"
         $NewOTPString = $null
         Set-ADUser -Identity $DistinguishedName -Clear @("$Attribute")
     }
-    $Script:Saved = $true
+    $SyncHash.Saved = $true
 }
 
 function Save-OtpToUserExportCommand {
     Write-Verbose "Function: Save-OtpToUserExportCommand"
-    $SelectedUser = $WPFControl_lvUsernames.SelectedItem
+    $SelectedUser = $SyncHash.WPFControl_lvUsernames.SelectedItem
     $DistinguishedName = $SelectedUser.DistinguishedName
-    if ($Script:DeviceSecrets.Count -gt 0) {
+    if ($SyncHash.DeviceSecrets.Count -gt 0) {
         $NewOTP = @()
-        ForEach ($Item in $Script:DeviceSecrets) {
+        ForEach ($Item in $SyncHash.DeviceSecrets) {
             $NewOTP += "{0}={1}" -f $Item.DeviceName, $Item.Secret
         }
         $NewOTPString = "#@$($NewOTP -Join '&,')&,"
         Write-Verbose "New OTP AD User String: `"$NewOTPString`""
-        #$DeviceName = $WPFControl_tbDeviceName.text
+        #$DeviceName = $SyncHash.WPFControl_tbDeviceName.text
         $ExportPoSHCommand = 'Set-ADUser -Identity "{0}" -Replace @{{ "{1}" = "{2}" }}' -f $DistinguishedName, $Attribute, $NewOTPString
     } else {
         Write-Verbose "No OTP for user, save empty string"
@@ -402,63 +407,62 @@ function Save-OtpToUserExportCommand {
     $result = [System.Windows.MessageBox]::Show("The PowerShell command to make the necessary changes was copied to the clipboard.`nClean the current screen? Changes are not saved to the selected user unless you run the copied command!", "PowerShell Command", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
     Write-Verbose "Result: $result"
     switch ($result) {
-        "Yes" { $Script:Saved = $true }
-        "No" { $Script:Saved = $false }
-        Default { $Script:Saved = $true }
+        "Yes" { $SyncHash.Saved = $true }
+        "No" { $SyncHash.Saved = $false }
+        Default { $SyncHash.Saved = $true }
     }
 }
 
 function Save-OtpToUser {
     Write-Verbose "Function: Save-OtpToUser"
-    $SelectedUser = $WPFControl_lvUsernames.SelectedItem
+    $SelectedUser = $SyncHash.WPFControl_lvUsernames.SelectedItem
     $DistinguishedName = $SelectedUser.DistinguishedName
-    $User = Get-ADUser -Identity $DistinguishedName
-    if ($Script:DeviceSecrets.Count -gt 0) {
+    if ($SyncHash.DeviceSecrets.Count -gt 0) {
         $NewOTP = @()
-        ForEach ($Item in $Script:DeviceSecrets) {
+        ForEach ($Item in $SyncHash.DeviceSecrets) {
             $NewOTP += "{0}={1}" -f $Item.DeviceName, $Item.Secret
         }
         $NewOTPString = "#@$($NewOTP -Join '&,')&,"
         Write-Verbose "New OTP AD User String: `"$NewOTPString`""
-        #$DeviceName = $WPFControl_tbDeviceName.text
+        #$DeviceName = $SyncHash.WPFControl_tbDeviceName.text
         Set-ADUser -Identity $DistinguishedName -Replace @{ "$Attribute" = $NewOTPString }
     } else {
         Write-Verbose "No OTP for user, save empty string"
         $NewOTPString = $null
         Set-ADUser -Identity $DistinguishedName -Clear @("$Attribute")
     }
-    $Script:Saved = $true
+    $SyncHash.Saved = $true
 }
 
 
-function Validate-GenerateQR {
-    Write-Verbose "Function: Validate-GenerateQR"
+function Invoke-ValidateGUIQR {
+    Write-Verbose "Function: Invoke-ValidateGUIQR"
     Update-Gui
-    if (([String]::IsNullOrEmpty($($WPFControl_tbGateway.Text))) -or ([String]::IsNullOrEmpty($($WPFControl_tbDeviceName.Text))) -or ([String]::IsNullOrEmpty($($WPFControl_tbSecret.Text)))) {
-        if ($WPFControl_btnGenerateQR.IsEnabled) { $WPFControl_btnGenerateQR.IsEnabled = $false }
+    if (([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbGateway.Text))) -or ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbDeviceName.Text))) -or ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbSecret.Text)))) {
+        if ($SyncHash.WPFControl_btnGenerateQR.IsEnabled) { $SyncHash.WPFControl_btnGenerateQR.IsEnabled = $false }
     } else {
-        if (-Not $WPFControl_btnGenerateQR.IsEnabled) { $WPFControl_btnGenerateQR.IsEnabled = $true }
+        if (-Not $SyncHash.WPFControl_btnGenerateQR.IsEnabled) { $SyncHash.WPFControl_btnGenerateQR.IsEnabled = $true }
     }
 }
 
-function Validate-AddSecret {
-    Write-Verbose "Function: Validate-AddSecret"
-    if (([String]::IsNullOrEmpty($($WPFControl_tbDeviceName.Text))) -or ([String]::IsNullOrEmpty($($WPFControl_tbSecret.Text)))) {
-        if ($WPFControl_btnAddQR.IsEnabled) { $WPFControl_btnAddQR.IsEnabled = $false }
+function Invoke-ValidateAddSecret {
+    Write-Verbose "Function: Invoke-ValidateAddSecret"
+    if (([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbDeviceName.Text))) -or ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbSecret.Text)))) {
+        if ($SyncHash.WPFControl_btnAddQR.IsEnabled) { $SyncHash.WPFControl_btnAddQR.IsEnabled = $false }
     } else {
-        if (-Not $WPFControl_btnAddQR.IsEnabled) { $WPFControl_btnAddQR.IsEnabled = $true }
+        if (-Not $SyncHash.WPFControl_btnAddQR.IsEnabled) { $SyncHash.WPFControl_btnAddQR.IsEnabled = $true }
     }
 }
 
-function Execute-SearchADUser {
-    Write-Verbose "Function: Execute-SearchADUser"
-    if ([String]::IsNullOrEmpty($($WPFControl_tbUsername.Text))) {
+function Invoke-SearchADUser {
+    Write-Verbose "Function: Invoke-SearchADUser"
+    if ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbUsername.Text))) {
         $null = [System.Windows.MessageBox]::Show("The Username field is empty!", "Username Empty", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     } else {
-        $Results = Search-User -Name $WPFControl_tbUsername.Text
-        $WPFControl_lvUsernames.ItemsSource = @($Results)
-        if ($WPFControl_lvUsernames.Items.Count -eq 1) {
-            $WPFControl_lvUsernames.SelectedIndex = 0
+        $Results = Search-User -Name $SyncHash.WPFControl_tbUsername.Text
+        $SyncHash.WPFControl_lvUsernames.ItemsSource = @($Results)
+        if ($SyncHash.WPFControl_lvUsernames.Items.Count -eq 1) {
+            $SyncHash.WPFControl_lvUsernames.SelectedIndex = 0
         }
     }
 }
@@ -467,15 +471,15 @@ function Start-App {
     if (-Not $Script:AppStarted) {
         Write-Verbose "Function: Start-App"
         try {
-            Load-Modules
-            Load-AppImage
+            Invoke-LoadModules
+            Invoke-LoadAppImage
             Initialize-GUI
             $Script:AppStarted = $true
         } catch { "ERROR: $($_.Exception.Message)" }
     }
 }
 
-function Load-Modules {
+function Invoke-LoadModules {
 
     <#
 [System.Net.ServicePointManager]::SecurityProtocol = 
@@ -496,9 +500,9 @@ Set-PSRepository -Name "PSGallery" -InstallationPolicy Untrusted -ErrorAction Si
     if (get-module -ListAvailable  ActiveDirectory -ErrorAction SilentlyContinue) {
         Import-Module -Name ActiveDirectory -Verbose:$False
     } else {
-        $WPFControl_tbUsername.Text = "ActiveDirectory Module NOT Found!"
-        if ($WPFControl_gbUser.IsEnabled) { $WPFControl_gbUser.IsEnabled = $false }
-        $result = [System.Windows.MessageBox]::Show("The PowerShell Module `"ActiveDirectory`" was NOT Found!", "ActiveDirectory Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+        $SyncHash.WPFControl_tbUsername.Text = "ActiveDirectory Module NOT Found!"
+        if ($SyncHash.WPFControl_gbUser.IsEnabled) { $SyncHash.WPFControl_gbUser.IsEnabled = $false }
+        $null = [System.Windows.MessageBox]::Show("The PowerShell Module `"ActiveDirectory`" was NOT Found!", "ActiveDirectory Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     }
     
     try {
@@ -514,8 +518,8 @@ Set-PSRepository -Name "PSGallery" -InstallationPolicy Untrusted -ErrorAction Si
                 } catch {
                     Write-Verbose "Failed, $($_.Exception.Message)"
                     $Script:QRGeneration = $false
-                    #$WPFControl_lblQR.Content = "NOT AVAILABLE!"
-                    $result = [System.Windows.MessageBox]::Show("Nuget PackageProvider was NOT Found!`nThis is required to install QRCodeGenerator`nInstall manually or Re-Run As Administrator", "NuGet Not Available", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Exclamation)
+                    #$SyncHash.WPFControl_lblQR.Content = "NOT AVAILABLE!"
+                    $null = [System.Windows.MessageBox]::Show("Nuget PackageProvider was NOT Found!`nThis is required to install QRCodeGenerator`nInstall manually or Re-Run As Administrator", "NuGet Not Available", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Exclamation)
                     Throw
                 }
             }
@@ -539,19 +543,19 @@ Set-PSRepository -Name "PSGallery" -InstallationPolicy Untrusted -ErrorAction Si
     } catch {
         Write-Verbose "Error, $($_.Exception.Message)"
         $Script:QRGeneration = $false
-        #$WPFControl_lblQR.Content = "NOT AVAILABLE!"
-        $result = [System.Windows.MessageBox]::Show("The PowerShell Module `"QRCodeGenerator`" was NOT Found!`nQR Code generation is disabled.", "QRCodeGenerator Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Exclamation)
+        #$SyncHash.WPFControl_lblQR.Content = "NOT AVAILABLE!"
+        $null = [System.Windows.MessageBox]::Show("The PowerShell Module `"QRCodeGenerator`" was NOT Found!`nQR Code generation is disabled.", "QRCodeGenerator Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Exclamation)
     }
 }
 
-function Load-AppImage {
+function Invoke-LoadAppImage {
     $AppImage = New-Object System.Windows.Media.Imaging.BitmapImage
     $AppImage.BeginInit()
     $AppImage.StreamSource = [System.IO.MemoryStream][System.Convert]::FromBase64String($AppImageB64)
     $AppImage.EndInit()
     $AppImage.Freeze()
-    $Form.Icon = $AppImage
-    $WPFControl_AppImage.Source = $AppImage
+    $SyncHash.Form.Icon = $AppImage
+    $SyncHash.WPFControl_AppImage.Source = $AppImage
 }
 
 if (-Not $NoHide) {
@@ -567,7 +571,7 @@ if (-Not $NoHide) {
    $null = $asyncwindow::ShowWindowAsync((Get-Process -PID $pid).MainWindowHandle, 0) 
 #>
 #Clear Console Window
-Clear-Host
+#Clear-Host
 
 #Load Assemblies
 Write-Verbose "Load: System.Drawing"
@@ -581,10 +585,49 @@ Add-Type -AssemblyName PresentationFramework
 #Write-Verbose "Load: System.Windows.Forms"
 #Add-Type -AssemblyName System.Windows.Forms
 
+$SyncHash = [hashtable]::Synchronized(@{ })
+$SyncHash.OTPUpdate = $True
+$SyncHash.OTPTimeWindow = 30
+$SyncHash.OTPLength = 6
+$SyncHash.Host = $host
+Write-Verbose "HashTable created"
+$RunSpace = [runspacefactory]::CreateRunspace()
+$RunSpace.Open()
+Write-Verbose "Runspace : $($RunSpace.RunspaceStateInfo.State)"
+$RunSpace.SessionStateProxy.SetVariable('SyncHash', $SyncHash)
+$PoSH = [powershell]::Create()
+$PoSH.Runspace = $RunSpace
+$PoSH.AddScript( {
+        While ($SyncHash.OTPUpdate) {
+            if ($null -ne $SyncHash.OTPToken -and ($SyncHash.OTPToken.ValidTo -is [datetime])) {
+                $SecondsLeft = ($SyncHash.OTPToken.ValidTo - (Get-Date)).TotalSeconds
+                if ($SecondsLeft -lt 0) {
+                    $SyncHash.host.ui.WriteVerboseLine("RS: Token is no longer valid")
+                    $syncHash.Form.Dispatcher.Invoke(
+                        [action] {
+                            $SyncHash.WPFControl_tbTOTPToken.Text = "------"
+                            $SyncHash.WPFControl_pbTOTPToken.Value = 0
+                            $SyncHash.OTPUpdate = $false
+                            $SyncHash.OTPToken = $null
+                        }
+                    )
+                } else {
+                    $syncHash.Form.Dispatcher.Invoke(
+                        [action] {
+                            $Progress = [int]($SecondsLeft / $SyncHash.OTPTimeWindow * 100)
+                            $SyncHash.WPFControl_pbTOTPToken.Value = $Progress
+                        }
+                    )
+                }
+            }
+            Start-Sleep -Seconds 1
+        }
+    }
+) | Out-Null
 
 #[System.Convert]::ToBase64String([system.Text.Encoding]::UTF8.GetBytes($(Get-Content -Path "C:\Users\John.Billekens\stack\Visual Studio\Repo\OTP4ADC\OTP4ADC\OTP4ADC\MainWindow.xaml" -Raw))) | clip.exe
 $XAMLDataB64 = @"
-PFdpbmRvdyB4OkNsYXNzPSJPVFA0QURDLk1haW5XaW5kb3ciDQogICAgICAgIHhtbG5zPSJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dpbmZ4LzIwMDYveGFtbC9wcmVzZW50YXRpb24iDQogICAgICAgIHhtbG5zOng9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vd2luZngvMjAwNi94YW1sIg0KICAgICAgICB4bWxuczpkPSJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL2V4cHJlc3Npb24vYmxlbmQvMjAwOCINCiAgICAgICAgeG1sbnM6bWM9Imh0dHA6Ly9zY2hlbWFzLm9wZW54bWxmb3JtYXRzLm9yZy9tYXJrdXAtY29tcGF0aWJpbGl0eS8yMDA2Ig0KICAgICAgICB4bWxuczpsb2NhbD0iY2xyLW5hbWVzcGFjZTpPVFA0QURDIg0KICAgICAgICBtYzpJZ25vcmFibGU9ImQiIA0KICAgICAgICBUaXRsZT0iT1RQNEFEQyIgU2l6ZVRvQ29udGVudD0iV2lkdGhBbmRIZWlnaHQiIFJlc2l6ZU1vZGU9Ik5vUmVzaXplIiBIZWlnaHQ9IkF1dG8iIFdpZHRoPSJBdXRvIj4NCiAgICA8R3JpZCBNYXJnaW49IjIiPg0KICAgICAgICA8R3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICA8L0dyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgIDxHcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgIDxDb2x1bW5EZWZpbml0aW9uIFdpZHRoPSJBdXRvIi8+DQogICAgICAgIDwvR3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgPEdyb3VwQm94IE5hbWU9ImdiVXNlciIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIwIiBHcmlkLlJvd1NwYW49IjIiIEhlYWRlcj0iVXNlciIgSGVpZ2h0PSJBdXRvIiBNYXJnaW49IjIiIFdpZHRoPSJBdXRvIj4NCiAgICAgICAgICAgIDxHcmlkIE1hcmdpbj0iMyI+DQogICAgICAgICAgICAgICAgPEdyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgIDwvR3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICA8R3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICA8L0dyaWQuQ29sdW1uRGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibFVzZXJuYW1lIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iODAiIE1hcmdpbj0iMiIgQ29udGVudD0iVXNlcm5hbWUiIC8+DQogICAgICAgICAgICAgICAgPFRleHRCb3ggTmFtZT0idGJVc2VybmFtZSIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIxIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBUZXh0PSIiIFdpZHRoPSIzMjAiIFRvb2xUaXA9IkVudGVyIHRoZSBVc2VybmFtZSBvciBwYXJ0IG9mIHRoZSB1c2VybmFtZSIgVGFiSW5kZXg9IjEwIiAvPg0KICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuU2VhcmNoIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjIiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IlNlYXJjaCIgV2lkdGg9IjEwMCIgSGVpZ2h0PSJBdXRvIiBUYWJJbmRleD0iMjAiIC8+DQogICAgICAgICAgICAgICAgPExpc3RWaWV3IE5hbWU9Imx2VXNlcm5hbWVzIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjEiIEdyaWQuUm93U3Bhbj0iMiIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJUb3AiIE1hcmdpbj0iMiIgSGVpZ2h0PSIxNTAiIFdpZHRoPSIzMjAiIEZvbnRTaXplPSI4IiBTZWxlY3Rpb25Nb2RlPSJTaW5nbGUiIFRhYkluZGV4PSIzMCIgPg0KICAgICAgICAgICAgICAgICAgICA8TGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDxHcmlkVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTYW1BY2NvdW50TmFtZSIgRGlzcGxheU1lbWJlckJpbmRpbmc9IntCaW5kaW5nIFNhbUFjY291bnROYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJVUE4iIERpc3BsYXlNZW1iZXJCaW5kaW5nPSJ7QmluZGluZyBVc2VyUHJpbmNpcGFsTmFtZX0iIC8+DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgPEdyaWRWaWV3Q29sdW1uIEhlYWRlcj0iR2l2ZW5OYW1lIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgR2l2ZW5OYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTdXJuYW1lIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgU3VybmFtZX0iIC8+DQogICAgICAgICAgICAgICAgICAgICAgICA8L0dyaWRWaWV3Pg0KICAgICAgICAgICAgICAgICAgICA8L0xpc3RWaWV3LlZpZXc+DQoNCiAgICAgICAgICAgICAgICA8L0xpc3RWaWV3Pg0KDQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5DbGVhciIgR3JpZC5Sb3c9IjEiIEdyaWQuQ29sdW1uPSIyIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJDbGVhciIgV2lkdGg9IjEwMCIgVmVydGljYWxBbGlnbm1lbnQ9IlRvcCIgSGVpZ2h0PSIyNyIgIC8+DQoNCiAgICAgICAgICAgICAgICA8TGFiZWwgTmFtZT0ibGJsQXR0cmlidXRlIiBHcmlkLlJvdz0iMyIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iVG9wIiBNYXJnaW49IjIiIENvbnRlbnQ9IkF0dHJpYnV0ZSIgV2lkdGg9IjkwIiAvPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiQXR0cmlidXRlIiBHcmlkLlJvdz0iMyIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9IiIgV2lkdGg9IjMyMCIgVG9vbFRpcD0iQ2FuIGJlIHByZS1jb25maWd1cmVkIGJ5IHN0YXJ0aW5nIHRoZSBhcHBsaWNhdGlvbiB3aXRoIHRoZSAtQXR0cmlidXRlICcmbHQ7QUQgQXR0cmlidXRlJmd0OycgcGFyYW1ldGVyLCBpZiBub3QgY29uZmlndXJlZCBpdCB1c2VzIHRoZSBkZWZhdWx0ICd1c2VyUGFyYW1ldGVycyciIC8+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibE90cCIgR3JpZC5Sb3c9IjQiIEdyaWQuQ29sdW1uPSIwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IlRvcCIgTWFyZ2luPSIyIiBDb250ZW50PSJPVFAiIFdpZHRoPSI5MCIgIFZlcnRpY2FsQWxpZ25tZW50PSJUb3AiLz4NCiAgICAgICAgICAgICAgICA8TGlzdFZpZXcgTmFtZT0ibHZPdHBzIiBHcmlkLlJvdz0iNCIgR3JpZC5Db2x1bW49IjEiIEdyaWQuUm93U3Bhbj0iMyIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJUb3AiIE1hcmdpbj0iMiIgIFdpZHRoPSIzMjAiIEZvbnRTaXplPSI4IiBTZWxlY3Rpb25Nb2RlPSJTaW5nbGUiIEhlaWdodD0iQXV0byIgVGFiSW5kZXg9IjQwIiAgPg0KICAgICAgICAgICAgICAgICAgICA8TGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDxHcmlkVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJEZXZpY2UgTmFtZSIgV2lkdGg9IkF1dG8iIERpc3BsYXlNZW1iZXJCaW5kaW5nPSJ7QmluZGluZyBEZXZpY2VOYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTZWNyZXQiIFdpZHRoPSJBdXRvIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgU2VjcmV0fSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDwvR3JpZFZpZXc+DQogICAgICAgICAgICAgICAgICAgIDwvTGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICA8L0xpc3RWaWV3Pg0KICAgICAgICAgICAgICAgIDxTdGFja1BhbmVsIEdyaWQuUm93PSI0IiBHcmlkLkNvbHVtbj0iMiIgR3JpZC5Sb3dTcGFuPSIzIiBIb3Jpem9udGFsQWxpZ25tZW50PSJTdHJldGNoIiBWZXJ0aWNhbEFsaWdubWVudD0iU3RyZXRjaCIgPg0KICAgICAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0bkRlbGV0ZU90cCIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iRGVsZXRlIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iVG9wIiBIZWlnaHQ9IjI3IiAvPg0KICAgICAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0blNhdmVPdHAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IlNhdmUiIFdpZHRoPSIxMDAiIFZlcnRpY2FsQWxpZ25tZW50PSJUb3AiIEhlaWdodD0iMjciIC8+DQogICAgICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuRXhwb3J0UG9zaCIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iRXhwb3J0IFBvU0giIFdpZHRoPSIxMDAiIFZlcnRpY2FsQWxpZ25tZW50PSJUb3AiIEhlaWdodD0iMjciIFRvb2xUaXA9IkV4cG9ydCB0aGUgUG93ZXJTaGVsbCBjb21tYW5kIHRvIG1ha2UgdGhlIG5lY2Vzc2FyeSBjaGFuZ2VzLiIgLz4NCiAgICAgICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5Mb2FkT3RwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJMb2FkIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iVG9wIiBIZWlnaHQ9IjI3IiBUYWJJbmRleD0iNTAiIC8+DQogICAgICAgICAgICAgICAgPC9TdGFja1BhbmVsPg0KICAgICAgICAgICAgICAgIA0KICAgICAgICAgICAgPC9HcmlkPg0KICAgICAgICA8L0dyb3VwQm94Pg0KICAgICAgICA8R3JvdXBCb3ggR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIxIiBIZWFkZXI9IlFSIiBIZWlnaHQ9IkF1dG8iIE1hcmdpbj0iMiIgV2lkdGg9IkF1dG8iPg0KICAgICAgICAgICAgPEdyaWQgTWFyZ2luPSIzIj4NCiAgICAgICAgICAgICAgICA8R3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICA8L0dyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgPEdyaWQuQ29sdW1uRGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxDb2x1bW5EZWZpbml0aW9uIFdpZHRoPSJBdXRvIi8+DQogICAgICAgICAgICAgICAgPC9HcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgIDxJbWFnZSBOYW1lPSJJbWdRUiIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIwIiBNYXJnaW49IjIiIEhlaWdodD0iMjAwIiBXaWR0aD0iMjAwIiBWaXNpYmlsaXR5PSJWaXNpYmxlIiBTdHJldGNoPSJVbmlmb3JtVG9GaWxsIiBSZW5kZXJUcmFuc2Zvcm1PcmlnaW49IjAuNSwwLjUiIC8+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibFFSIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjAiIE1hcmdpbj0iMiIgQ29udGVudD0iIiBWZXJ0aWNhbEFsaWdubWVudD0iQm90dG9tIiBIb3Jpem9udGFsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgVmlzaWJpbGl0eT0iVmlzaWJsZSIgRm9udFdlaWdodD0iQm9sZCIgRm9udFNpemU9IjE2Ii8+DQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5FeHBvcnRRUiIgR3JpZC5Sb3c9IjIiIEdyaWQuQ29sdW1uPSIwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJFeHBvcnQgUVIiIFdpZHRoPSIxMDAiIFZlcnRpY2FsQWxpZ25tZW50PSJCb3R0b20iIEhlaWdodD0iMjciIFRhYkluZGV4PSIxMDAiIC8+DQogICAgICAgICAgICA8L0dyaWQ+DQogICAgICAgIDwvR3JvdXBCb3g+DQogICAgICAgIDxHcm91cEJveCBHcmlkLlJvdz0iMiIgR3JpZC5Db2x1bW49IjAiIEhlYWRlcj0iVE9UUCIgSGVpZ2h0PSJhdXRvIiBNYXJnaW49IjIiIFdpZHRoPSJBdXRvIj4NCiAgICAgICAgICAgIDxHcmlkIE1hcmdpbj0iMyI+DQogICAgICAgICAgICAgICAgPEdyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgPC9HcmlkLlJvd0RlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgIDxHcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgICAgICA8Q29sdW1uRGVmaW5pdGlvbiBXaWR0aD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Q29sdW1uRGVmaW5pdGlvbiBXaWR0aD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Q29sdW1uRGVmaW5pdGlvbiBXaWR0aD0iQXV0byIvPg0KICAgICAgICAgICAgICAgIDwvR3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICA8TGFiZWwgTmFtZT0ibGJsU2VjcmV0IiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iOTAiIE1hcmdpbj0iMiIgQ29udGVudD0iU2VjcmV0IiAvPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiU2VjcmV0IiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9IiIgV2lkdGg9IjMyMCIgSXNSZWFkT25seT0iVHJ1ZSIgLz4NCiAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0bkdlbmVyYXRlU2VjcmV0IiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjIiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IkdlbmVyYXRlIFNlY3JldCIgV2lkdGg9IjEwMCIgVGFiSW5kZXg9IjYwIiAvPg0KICAgICAgICAgICAgICAgIDxMYWJlbCBOYW1lPSJsYmxEZXZpY2VOYW1lIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iOTAiIE1hcmdpbj0iMiIgQ29udGVudD0iRGV2aWNlIE5hbWUiIC8+DQogICAgICAgICAgICAgICAgPFRleHRCb3ggTmFtZT0idGJEZXZpY2VOYW1lIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9IiIgV2lkdGg9IjMyMCIgVGFiSW5kZXg9IjcwIiAvPg0KICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuQWRkUVIiIEdyaWQuUm93PSIxIiBHcmlkLkNvbHVtbj0iMiIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iQWRkIiBXaWR0aD0iMTAwIiAvPg0KICAgICAgICAgICAgICAgIDxMYWJlbCBOYW1lPSJsYmxHYXRld2F5IiBHcmlkLlJvdz0iMiIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iOTAiIE1hcmdpbj0iMiIgQ29udGVudD0iR2F0ZXdheSBmcWRuIiAvPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiR2F0ZXdheSIgR3JpZC5Sb3c9IjIiIEdyaWQuQ29sdW1uPSIxIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBUZXh0PSIiIFdpZHRoPSIzMjAiIFRvb2xUaXA9IkNhbiBiZSBwcmUtY29uZmlndXJlZCBieSBzdGFydGluZyB0aGUgYXBwbGljYXRpb24gd2l0aCB0aGUgLUdhdGV3YXlVcmkgJyZsdDtndy5kb21haW4uY29tJmd0OycgcGFyYW1ldGVyIiBUYWJJbmRleD0iODAiIC8+DQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5HZW5lcmF0ZVFSIiBHcmlkLlJvdz0iMiIgR3JpZC5Db2x1bW49IjIiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IkdlbmVyYXRlIFFSIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iVG9wIiBIZWlnaHQ9IjI3IiBUYWJJbmRleD0iOTAiIC8+DQogICAgICAgICAgICA8L0dyaWQ+DQogICAgICAgIDwvR3JvdXBCb3g+DQogICAgICAgIDxHcm91cEJveCBOYW1lPSJnYlRva2VuIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjEiIEhlYWRlcj0iVG9rZW4iIEhlaWdodD0iQXV0byIgTWFyZ2luPSIyIiBXaWR0aD0iQXV0byIgVmlzaWJpbGl0eT0iVmlzaWJsZSIgSXNFbmFibGVkPSJGYWxzZSI+DQogICAgICAgICAgICA8R3JpZCBNYXJnaW49IjMiPg0KICAgICAgICAgICAgICAgIDxHcmlkLlJvd0RlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICA8L0dyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgPEdyaWQuQ29sdW1uRGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxDb2x1bW5EZWZpbml0aW9uIC8+DQogICAgICAgICAgICAgICAgICAgIDxDb2x1bW5EZWZpbml0aW9uIFdpZHRoPSJBdXRvIi8+DQogICAgICAgICAgICAgICAgPC9HcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiVE9UUFRva2VuIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9Ii0tLS0tLSIgV2lkdGg9IkF1dG8iIElzUmVhZE9ubHk9IlRydWUiIEhvcml6b250YWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIEZvbnRTaXplPSIyMCIgRm9udEZhbWlseT0iTHVjaWRhIENvbnNvbGUiIC8+DQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5WaWV3VE9UUFRva2VuIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IlZpZXcgVG9rZW4iIFdpZHRoPSIxMDAiIEhlaWdodD0iMjciIC8+DQoNCiAgICAgICAgICAgIDwvR3JpZD4NCiAgICAgICAgPC9Hcm91cEJveD4NCiAgICAgICAgPEltYWdlIE5hbWU9IkFwcEltYWdlIiAgR3JpZC5Db2x1bW49IjEiICBHcmlkLlJvdz0iMiIgSG9yaXpvbnRhbEFsaWdubWVudD0iUmlnaHQiIEhlaWdodD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iQm90dG9tIiBXaWR0aD0iMTAwIi8+DQogICAgPC9HcmlkPg0KPC9XaW5kb3c+DQo=
+PFdpbmRvdyB4OkNsYXNzPSJPVFA0QURDLk1haW5XaW5kb3ciDQogICAgICAgIHhtbG5zPSJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dpbmZ4LzIwMDYveGFtbC9wcmVzZW50YXRpb24iDQogICAgICAgIHhtbG5zOng9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vd2luZngvMjAwNi94YW1sIg0KICAgICAgICB4bWxuczpkPSJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL2V4cHJlc3Npb24vYmxlbmQvMjAwOCINCiAgICAgICAgeG1sbnM6bWM9Imh0dHA6Ly9zY2hlbWFzLm9wZW54bWxmb3JtYXRzLm9yZy9tYXJrdXAtY29tcGF0aWJpbGl0eS8yMDA2Ig0KICAgICAgICB4bWxuczpsb2NhbD0iY2xyLW5hbWVzcGFjZTpPVFA0QURDIg0KICAgICAgICBtYzpJZ25vcmFibGU9ImQiIA0KICAgICAgICBUaXRsZT0iT1RQNEFEQyIgU2l6ZVRvQ29udGVudD0iV2lkdGhBbmRIZWlnaHQiIFJlc2l6ZU1vZGU9Ik5vUmVzaXplIiBIZWlnaHQ9IkF1dG8iIFdpZHRoPSJBdXRvIj4NCiAgICA8R3JpZCBNYXJnaW49IjIiPg0KICAgICAgICA8R3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICA8L0dyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgIDxHcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgIDxDb2x1bW5EZWZpbml0aW9uIFdpZHRoPSJBdXRvIi8+DQogICAgICAgIDwvR3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgPEdyb3VwQm94IE5hbWU9ImdiVXNlciIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIwIiBHcmlkLlJvd1NwYW49IjIiIEhlYWRlcj0iVXNlciIgSGVpZ2h0PSJBdXRvIiBNYXJnaW49IjIiIFdpZHRoPSJBdXRvIj4NCiAgICAgICAgICAgIDxHcmlkIE1hcmdpbj0iMyI+DQogICAgICAgICAgICAgICAgPEdyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgIDwvR3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICA8R3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICA8L0dyaWQuQ29sdW1uRGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibFVzZXJuYW1lIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iODAiIE1hcmdpbj0iMiIgQ29udGVudD0iVXNlcm5hbWUiIC8+DQogICAgICAgICAgICAgICAgPFRleHRCb3ggTmFtZT0idGJVc2VybmFtZSIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIxIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBUZXh0PSIiIFdpZHRoPSIzMjAiIFRvb2xUaXA9IkVudGVyIHRoZSBVc2VybmFtZSBvciBwYXJ0IG9mIHRoZSB1c2VybmFtZSIgVGFiSW5kZXg9IjEwIiAvPg0KICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuU2VhcmNoIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjIiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IlNlYXJjaCIgV2lkdGg9IjEwMCIgSGVpZ2h0PSJBdXRvIiBUYWJJbmRleD0iMjAiIC8+DQogICAgICAgICAgICAgICAgPExpc3RWaWV3IE5hbWU9Imx2VXNlcm5hbWVzIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjEiIEdyaWQuUm93U3Bhbj0iMiIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJUb3AiIE1hcmdpbj0iMiIgSGVpZ2h0PSIxNTAiIFdpZHRoPSIzMjAiIEZvbnRTaXplPSI4IiBTZWxlY3Rpb25Nb2RlPSJTaW5nbGUiIFRhYkluZGV4PSIzMCIgPg0KICAgICAgICAgICAgICAgICAgICA8TGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDxHcmlkVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTYW1BY2NvdW50TmFtZSIgRGlzcGxheU1lbWJlckJpbmRpbmc9IntCaW5kaW5nIFNhbUFjY291bnROYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJVUE4iIERpc3BsYXlNZW1iZXJCaW5kaW5nPSJ7QmluZGluZyBVc2VyUHJpbmNpcGFsTmFtZX0iIC8+DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgPEdyaWRWaWV3Q29sdW1uIEhlYWRlcj0iR2l2ZW5OYW1lIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgR2l2ZW5OYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTdXJuYW1lIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgU3VybmFtZX0iIC8+DQogICAgICAgICAgICAgICAgICAgICAgICA8L0dyaWRWaWV3Pg0KICAgICAgICAgICAgICAgICAgICA8L0xpc3RWaWV3LlZpZXc+DQoNCiAgICAgICAgICAgICAgICA8L0xpc3RWaWV3Pg0KDQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5DbGVhciIgR3JpZC5Sb3c9IjEiIEdyaWQuQ29sdW1uPSIyIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJDbGVhciIgV2lkdGg9IjEwMCIgVmVydGljYWxBbGlnbm1lbnQ9IlRvcCIgSGVpZ2h0PSIyNyIgIC8+DQoNCiAgICAgICAgICAgICAgICA8TGFiZWwgTmFtZT0ibGJsQXR0cmlidXRlIiBHcmlkLlJvdz0iMyIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iVG9wIiBNYXJnaW49IjIiIENvbnRlbnQ9IkF0dHJpYnV0ZSIgV2lkdGg9IjkwIiAvPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiQXR0cmlidXRlIiBHcmlkLlJvdz0iMyIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9IiIgV2lkdGg9IjMyMCIgVG9vbFRpcD0iQ2FuIGJlIHByZS1jb25maWd1cmVkIGJ5IHN0YXJ0aW5nIHRoZSBhcHBsaWNhdGlvbiB3aXRoIHRoZSAtQXR0cmlidXRlICcmbHQ7QUQgQXR0cmlidXRlJmd0OycgcGFyYW1ldGVyLCBpZiBub3QgY29uZmlndXJlZCBpdCB1c2VzIHRoZSBkZWZhdWx0ICd1c2VyUGFyYW1ldGVycyciIC8+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibE90cCIgR3JpZC5Sb3c9IjQiIEdyaWQuQ29sdW1uPSIwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IlRvcCIgTWFyZ2luPSIyIiBDb250ZW50PSJPVFAiIFdpZHRoPSI5MCIgIFZlcnRpY2FsQWxpZ25tZW50PSJUb3AiLz4NCiAgICAgICAgICAgICAgICA8TGlzdFZpZXcgTmFtZT0ibHZPdHBzIiBHcmlkLlJvdz0iNCIgR3JpZC5Db2x1bW49IjEiIEdyaWQuUm93U3Bhbj0iMyIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJUb3AiIE1hcmdpbj0iMiIgIFdpZHRoPSIzMjAiIEZvbnRTaXplPSI4IiBTZWxlY3Rpb25Nb2RlPSJTaW5nbGUiIEhlaWdodD0iQXV0byIgVGFiSW5kZXg9IjQwIiAgPg0KICAgICAgICAgICAgICAgICAgICA8TGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDxHcmlkVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJEZXZpY2UgTmFtZSIgV2lkdGg9IkF1dG8iIERpc3BsYXlNZW1iZXJCaW5kaW5nPSJ7QmluZGluZyBEZXZpY2VOYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTZWNyZXQiIFdpZHRoPSJBdXRvIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgU2VjcmV0fSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDwvR3JpZFZpZXc+DQogICAgICAgICAgICAgICAgICAgIDwvTGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICA8L0xpc3RWaWV3Pg0KICAgICAgICAgICAgICAgIDxTdGFja1BhbmVsIEdyaWQuUm93PSI0IiBHcmlkLkNvbHVtbj0iMiIgR3JpZC5Sb3dTcGFuPSIzIiBIb3Jpem9udGFsQWxpZ25tZW50PSJTdHJldGNoIiBWZXJ0aWNhbEFsaWdubWVudD0iU3RyZXRjaCIgTWFyZ2luPSIxIj4NCiAgICAgICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5EZWxldGVPdHAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IkRlbGV0ZSIgV2lkdGg9IjEwMCIgVmVydGljYWxBbGlnbm1lbnQ9IlRvcCIgSGVpZ2h0PSIyNyIgLz4NCiAgICAgICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5TYXZlT3RwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJTYXZlIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iVG9wIiBIZWlnaHQ9IjI3IiAvPg0KICAgICAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0bkV4cG9ydFBvc2giIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IkV4cG9ydCBQb1NIIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iVG9wIiBIZWlnaHQ9IjI3IiBUb29sVGlwPSJFeHBvcnQgdGhlIFBvd2VyU2hlbGwgY29tbWFuZCB0byBtYWtlIHRoZSBuZWNlc3NhcnkgY2hhbmdlcy4iIC8+DQogICAgICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuTG9hZE90cCIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iTG9hZCIgV2lkdGg9IjEwMCIgVmVydGljYWxBbGlnbm1lbnQ9IlRvcCIgSGVpZ2h0PSIyNyIgVGFiSW5kZXg9IjUwIiAvPg0KICAgICAgICAgICAgICAgIDwvU3RhY2tQYW5lbD4NCiAgICAgICAgICAgICAgICANCiAgICAgICAgICAgIDwvR3JpZD4NCiAgICAgICAgPC9Hcm91cEJveD4NCiAgICAgICAgPEdyb3VwQm94IEdyaWQuUm93PSIwIiBHcmlkLkNvbHVtbj0iMSIgSGVhZGVyPSJRUiIgSGVpZ2h0PSJBdXRvIiBNYXJnaW49IjIiIFdpZHRoPSJBdXRvIj4NCiAgICAgICAgICAgIDxHcmlkIE1hcmdpbj0iMyI+DQogICAgICAgICAgICAgICAgPEdyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgPC9HcmlkLlJvd0RlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgIDxHcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgICAgICA8Q29sdW1uRGVmaW5pdGlvbiBXaWR0aD0iQXV0byIvPg0KICAgICAgICAgICAgICAgIDwvR3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICA8SW1hZ2UgTmFtZT0iSW1nUVIiIEdyaWQuUm93PSIwIiBHcmlkLkNvbHVtbj0iMCIgTWFyZ2luPSIyIiBIZWlnaHQ9IjIwMCIgV2lkdGg9IjIwMCIgVmlzaWJpbGl0eT0iVmlzaWJsZSIgU3RyZXRjaD0iVW5pZm9ybVRvRmlsbCIgUmVuZGVyVHJhbnNmb3JtT3JpZ2luPSIwLjUsMC41IiAvPg0KICAgICAgICAgICAgICAgIDxMYWJlbCBOYW1lPSJsYmxRUiIgR3JpZC5Sb3c9IjEiIEdyaWQuQ29sdW1uPSIwIiBNYXJnaW49IjIiIENvbnRlbnQ9IiIgVmVydGljYWxBbGlnbm1lbnQ9IkJvdHRvbSIgSG9yaXpvbnRhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIFZpc2liaWxpdHk9IlZpc2libGUiIEZvbnRXZWlnaHQ9IkJvbGQiIEZvbnRTaXplPSIxNiIvPg0KICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuRXhwb3J0UVIiIEdyaWQuUm93PSIyIiBHcmlkLkNvbHVtbj0iMCIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iRXhwb3J0IFFSIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iQm90dG9tIiBIZWlnaHQ9IjI3IiBUYWJJbmRleD0iMTAwIiAvPg0KICAgICAgICAgICAgPC9HcmlkPg0KICAgICAgICA8L0dyb3VwQm94Pg0KICAgICAgICA8R3JvdXBCb3ggR3JpZC5Sb3c9IjIiIEdyaWQuQ29sdW1uPSIwIiBIZWFkZXI9IlRPVFAiIEhlaWdodD0iQXV0byIgTWFyZ2luPSIyIiBXaWR0aD0iQXV0byI+DQogICAgICAgICAgICA8R3JpZCBNYXJnaW49IjMiPg0KICAgICAgICAgICAgICAgIDxHcmlkLlJvd0RlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgIDwvR3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICA8R3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICA8L0dyaWQuQ29sdW1uRGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibFNlY3JldCIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgV2lkdGg9IjkwIiBNYXJnaW49IjIiIENvbnRlbnQ9IlNlY3JldCIgLz4NCiAgICAgICAgICAgICAgICA8VGV4dEJveCBOYW1lPSJ0YlNlY3JldCIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIxIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBUZXh0PSIiIFdpZHRoPSIzMjAiIElzUmVhZE9ubHk9IlRydWUiIC8+DQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5HZW5lcmF0ZVNlY3JldCIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIyIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJHZW5lcmF0ZSBTZWNyZXQiIFdpZHRoPSIxMDAiIFRhYkluZGV4PSI2MCIgLz4NCiAgICAgICAgICAgICAgICA8TGFiZWwgTmFtZT0ibGJsRGV2aWNlTmFtZSIgR3JpZC5Sb3c9IjEiIEdyaWQuQ29sdW1uPSIwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgV2lkdGg9IjkwIiBNYXJnaW49IjIiIENvbnRlbnQ9IkRldmljZSBOYW1lIiAvPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiRGV2aWNlTmFtZSIgR3JpZC5Sb3c9IjEiIEdyaWQuQ29sdW1uPSIxIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBUZXh0PSIiIFdpZHRoPSIzMjAiIFRhYkluZGV4PSI3MCIgLz4NCiAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0bkFkZFFSIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjIiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IkFkZCIgV2lkdGg9IjEwMCIgLz4NCiAgICAgICAgICAgICAgICA8TGFiZWwgTmFtZT0ibGJsR2F0ZXdheSIgR3JpZC5Sb3c9IjIiIEdyaWQuQ29sdW1uPSIwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgV2lkdGg9IjkwIiBNYXJnaW49IjIiIENvbnRlbnQ9IkdhdGV3YXkgZnFkbiIgLz4NCiAgICAgICAgICAgICAgICA8VGV4dEJveCBOYW1lPSJ0YkdhdGV3YXkiIEdyaWQuUm93PSIyIiBHcmlkLkNvbHVtbj0iMSIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgVGV4dD0iIiBXaWR0aD0iMzIwIiBUb29sVGlwPSJDYW4gYmUgcHJlLWNvbmZpZ3VyZWQgYnkgc3RhcnRpbmcgdGhlIGFwcGxpY2F0aW9uIHdpdGggdGhlIC1HYXRld2F5VXJpICcmbHQ7Z3cuZG9tYWluLmNvbSZndDsnIHBhcmFtZXRlciIgVGFiSW5kZXg9IjgwIiAvPg0KICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuR2VuZXJhdGVRUiIgR3JpZC5Sb3c9IjIiIEdyaWQuQ29sdW1uPSIyIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJHZW5lcmF0ZSBRUiIgV2lkdGg9IjEwMCIgVmVydGljYWxBbGlnbm1lbnQ9IlRvcCIgSGVpZ2h0PSIyNyIgVGFiSW5kZXg9IjkwIiAvPg0KICAgICAgICAgICAgPC9HcmlkPg0KICAgICAgICA8L0dyb3VwQm94Pg0KICAgICAgICA8R3JvdXBCb3ggTmFtZT0iZ2JUb2tlbiIgR3JpZC5Sb3c9IjEiIEdyaWQuQ29sdW1uPSIxIiBIZWFkZXI9IlRva2VuIiBIZWlnaHQ9IkF1dG8iIE1hcmdpbj0iMiIgV2lkdGg9IkF1dG8iIElzRW5hYmxlZD0iRmFsc2UiPg0KICAgICAgICAgICAgPEdyaWQgTWFyZ2luPSIzIj4NCiAgICAgICAgICAgICAgICA8R3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgIDwvR3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICA8R3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gLz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICA8L0dyaWQuQ29sdW1uRGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgPFRleHRCb3ggTmFtZT0idGJUT1RQVG9rZW4iIEdyaWQuUm93PSIwIiBHcmlkLkNvbHVtbj0iMCIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgVGV4dD0iLS0tLS0tIiBXaWR0aD0iQXV0byIgSXNSZWFkT25seT0iVHJ1ZSIgSG9yaXpvbnRhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgRm9udFNpemU9IjIwIiBGb250RmFtaWx5PSJMdWNpZGEgQ29uc29sZSIgLz4NCiAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0blZpZXdUT1RQVG9rZW4iIEdyaWQuUm93PSIwIiBHcmlkLkNvbHVtbj0iMSIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iVmlldyBUb2tlbiIgV2lkdGg9IjEwMCIgSGVpZ2h0PSIyNyIgLz4NCiAgICAgICAgICAgICAgICA8UHJvZ3Jlc3NCYXIgTmFtZT0icGJUT1RQVG9rZW4iIEdyaWQuUm93PSIxIiBHcmlkLkNvbHVtbj0iMCIgR3JpZC5Db2x1bW5TcGFuPSIyIiBIZWlnaHQ9IjUiIE1hcmdpbj0iMiIvPg0KICAgICAgICAgICAgPC9HcmlkPg0KICAgICAgICA8L0dyb3VwQm94Pg0KICAgICAgICA8SW1hZ2UgTmFtZT0iQXBwSW1hZ2UiICBHcmlkLkNvbHVtbj0iMSIgIEdyaWQuUm93PSIyIiBIb3Jpem9udGFsQWxpZ25tZW50PSJSaWdodCIgSGVpZ2h0PSIxMDAiIFZlcnRpY2FsQWxpZ25tZW50PSJCb3R0b20iIFdpZHRoPSIxMDAiLz4NCiAgICA8L0dyaWQ+DQo8L1dpbmRvdz4NCg==
 "@
 # [Convert]::ToBase64String(($QRImage.ToArray())) | clip.exe
 $AppImageB64 = @"
@@ -595,8 +638,10 @@ $InputXML = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64S
 [XML]$XAML = $InputXML -replace 'mc:Ignorable="d"', '' -replace "x:N", 'N' -replace '^<Win.*', '<Window'
 
 try {
-    $App = [Windows.Application]::new()
-    $Form = [Windows.Markup.XamlReader]::Load( [Xml.XmlNodeReader]::new($XAML) )
+    #$App = [Windows.Application]::new()
+    #$Form = [Windows.Markup.XamlReader]::Load( [Xml.XmlNodeReader]::new($XAML) )
+    $SyncHash.App = [Windows.Application]::new()
+    $SyncHash.Form = [Windows.Markup.XamlReader]::Load( (New-Object System.Xml.XmlNodeReader $XAML) )
 } catch {
     Write-Warning "Unable to parse XML, with error: $($Error[0])`n Ensure that there are NO SelectionChanged or TextChanged properties in your textboxes (PowerShell cannot process them)"
     throw
@@ -604,7 +649,8 @@ try {
 
 $XAML.SelectNodes("//*[@Name]") | ForEach-Object {
     try {
-        Set-Variable -Name "WPFControl_$($_.Name)" -Value $Form.FindName($_.Name) -ErrorAction Stop
+        #Set-Variable -Name "WPFControl_$($_.Name)" -Value $SyncHash.Form.FindName($_.Name) -ErrorAction Stop
+        $SyncHash."WPFControl_$($_.Name)" = $SyncHash.Form.FindName($_.Name)
     } catch {
         throw
     }
@@ -612,20 +658,21 @@ $XAML.SelectNodes("//*[@Name]") | ForEach-Object {
 
 Write-Verbose "Defining intractable elements"
 #All WPF GUI variables
-$Controls = Get-Variable WPFControl_*
+#$Controls = Get-Variable WPFControl_*
+
 #Global variable, check if changes are saved
-$Saved = $true
+$SyncHash.Saved = $true
 
 #region Event handlers
 
 #System.ComponentModel.CancelEventHandler Closing(System.Object, System.ComponentModel.CancelEventArgs)
-$Form.add_Closing( {
+$SyncHash.Form.add_Closing( {
         Write-Verbose "GUI Closing"
         try {
-            Clean-GUIQRImage
-            $Form.Close()
-            $App.Shutdown()
-            $App.Exit()
+            Invoke-CleanGUIQRImage
+            $SyncHash.Form.Close()
+            $SyncHash.App.Shutdown()
+            $SyncHash.App.Exit()
             if (-Not $NoHide) {
                 Stop-Process -Id $PID 
             } elseif ($Console) {
@@ -636,16 +683,15 @@ $Form.add_Closing( {
     }
 )
 
-
 #System.EventHandler Initialized(System.Object, System.EventArgs)
 #System.EventHandler Activated(System.Object, System.EventArgs)
 
-$Form.add_Loaded( {
+$SyncHash.Form.add_Loaded( {
         Write-Verbose "GUI Loaded"
     }
 )
 
-$Form.add_Activated( {
+$SyncHash.Form.add_Activated( {
         Write-Verbose "GUI Activated"
         Start-App
     }
@@ -653,87 +699,87 @@ $Form.add_Activated( {
 
 #System.Windows.DependencyPropertyChangedEventHandler IsVisibleChanged(System.Object, System.Windows.DependencyPropertyChangedEventArgs)
 
-$WPFControl_btnGenerateSecret.Add_Click( { # btnGenerateSecret Click Action
+$SyncHash.WPFControl_btnGenerateSecret.Add_Click( { # btnGenerateSecret Click Action
         Update-Gui
-        Clean-GUIQRImage
-        $Script:B32Secret = Generate-OTPSecret
-        #$Script:B32Secret = New-AuthenticatorSecret
-        $WPFControl_tbSecret.Text = $Script:B32Secret
-        if (-Not $WPFControl_tbDeviceName.IsEnabled) { $WPFControl_tbDeviceName.IsEnabled = $true }
+        Invoke-CleanGUIQRImage
+        $SyncHash.B32Secret = Get-OTPSecret
+        #$SyncHash.B32Secret = New-AuthenticatorSecret
+        $SyncHash.WPFControl_tbSecret.Text = $SyncHash.B32Secret
+        if (-Not $SyncHash.WPFControl_tbDeviceName.IsEnabled) { $SyncHash.WPFControl_tbDeviceName.IsEnabled = $true }
     }
 )
 
-$WPFControl_btnClear.Add_Click( 
+$SyncHash.WPFControl_btnClear.Add_Click( 
     { # btnClear Click Action
         Update-Gui
         Reset-GUIForm
     }
 )
 
-$WPFControl_btnDeleteOtp.Add_Click( 
+$SyncHash.WPFControl_btnDeleteOtp.Add_Click( 
     { # btnDeleteOtp Click Action
         Update-Gui
-        $SelectedItem = $WPFControl_lvOtps.SelectedItem
-        $Script:DeviceSecrets = @($Script:DeviceSecrets | Where-Object { $_.Secret -ne $SelectedItem.Secret })
-        $WPFControl_lvOtps.ItemsSource = $Script:DeviceSecrets
-        if (-Not $WPFControl_btnSaveOtp.IsEnabled) { $WPFControl_btnSaveOtp.IsEnabled = $true }
-        if (-Not $WPFControl_btnExportPosh.IsEnabled) { $WPFControl_btnExportPosh.IsEnabled = $true }
-        $Script:Saved = $false
+        $SelectedItem = $SyncHash.WPFControl_lvOtps.SelectedItem
+        $SyncHash.DeviceSecrets = @($SyncHash.DeviceSecrets | Where-Object { $_.Secret -ne $SelectedItem.Secret })
+        $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncHash.DeviceSecrets
+        if (-Not $SyncHash.WPFControl_btnSaveOtp.IsEnabled) { $SyncHash.WPFControl_btnSaveOtp.IsEnabled = $true }
+        if (-Not $SyncHash.WPFControl_btnExportPosh.IsEnabled) { $SyncHash.WPFControl_btnExportPosh.IsEnabled = $true }
+        $SyncHash.Saved = $false
     }
 )
 
-$WPFControl_btnSaveOtp.Add_Click( 
+$SyncHash.WPFControl_btnSaveOtp.Add_Click( 
     { # btnSaveOtp Click Action
         Update-Gui
         Save-OtpToUser
-        Clean-GUIUser
+        Invoke-CleanGUIUser
     }
 )
 
-$WPFControl_btnExportPosh.Add_Click( 
+$SyncHash.WPFControl_btnExportPosh.Add_Click( 
     { # btnExportPosh Click Action
         Update-Gui
         Save-OtpToUserExportCommand
-        if ($Script:Saved) {
-            Clean-GUIUser
+        if ($SyncHash.Saved) {
+            Invoke-CleanGUIUser
         }
     }
 )
 
-$WPFControl_btnLoadOtp.Add_Click( 
+$SyncHash.WPFControl_btnLoadOtp.Add_Click( 
     { # btnSaveOtp Click Action
-        Clean-GUIQRImage
-        $SelectedItem = $WPFControl_lvOtps.SelectedItem
-        $WPFControl_tbSecret.Text = $SelectedItem.Secret
-        $Script:B32Secret = $SelectedItem.Secret
-        $WPFControl_tbDeviceName.Text = $SelectedItem.DeviceName
+        Invoke-CleanGUIQRImage
+        $SelectedItem = $SyncHash.WPFControl_lvOtps.SelectedItem
+        $SyncHash.WPFControl_tbSecret.Text = $SelectedItem.Secret
+        $SyncHash.B32Secret = $SelectedItem.Secret
+        $SyncHash.WPFControl_tbDeviceName.Text = $SelectedItem.DeviceName
     }
 )
 
-$WPFControl_btnAddQR.Add_Click( 
+$SyncHash.WPFControl_btnAddQR.Add_Click( 
     { # btnAddQR Click Action
         Update-Gui
-        if ($Script:DeviceSecrets.Count -ge 4) {
+        if ($SyncHash.DeviceSecrets.Count -ge 4) {
             $null = [System.Windows.MessageBox]::Show("The maximum of allowed devices reached.`nTo continue remove one device!", "Maximum Reached!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
-        } elseif ($Script:DeviceSecrets | Where-Object DeviceName -eq $($WPFControl_tbDeviceName.Text)) {
-            $null = [System.Windows.MessageBox]::Show("The Device Name `"$($WPFControl_tbDeviceName.Text)`" already exists", "Double Entry!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
-        } elseif ($Script:DeviceSecrets | Where-Object Secret -eq $($Script:B32Secret)) {
+        } elseif ($SyncHash.DeviceSecrets | Where-Object DeviceName -eq $($SyncHash.WPFControl_tbDeviceName.Text)) {
+            $null = [System.Windows.MessageBox]::Show("The Device Name `"$($SyncHash.WPFControl_tbDeviceName.Text)`" already exists", "Double Entry!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+        } elseif ($SyncHash.DeviceSecrets | Where-Object Secret -eq $($SyncHash.B32Secret)) {
             $null = [System.Windows.MessageBox]::Show("The Secret already exists!`nGenerate a new secret", "Double Entry!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
         } else {
-            if (-Not $WPFControl_btnSaveOtp.IsEnabled) { $WPFControl_btnSaveOtp.IsEnabled = $true }
-            if (-Not $WPFControl_btnExportPosh.IsEnabled) { $WPFControl_btnExportPosh.IsEnabled = $true }
-            $Script:DeviceSecrets += [PSCustomObject]@{
-                DeviceName = $($WPFControl_tbDeviceName.Text)
-                Secret     = $($Script:B32Secret)
+            if (-Not $SyncHash.WPFControl_btnSaveOtp.IsEnabled) { $SyncHash.WPFControl_btnSaveOtp.IsEnabled = $true }
+            if (-Not $SyncHash.WPFControl_btnExportPosh.IsEnabled) { $SyncHash.WPFControl_btnExportPosh.IsEnabled = $true }
+            $SyncHash.DeviceSecrets += [PSCustomObject]@{
+                DeviceName = $($SyncHash.WPFControl_tbDeviceName.Text)
+                Secret     = $($SyncHash.B32Secret)
             }
-            $WPFControl_lvOtps.ItemsSource = $Script:DeviceSecrets
+            $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncHash.DeviceSecrets
         }
-        $Script:Saved = $false
-        Clean-GUIQR
+        $SyncHash.Saved = $false
+        Invoke-CleanGUIQR
     }
 )
 
-$WPFControl_tbUsername.Add_KeyDown{
+$SyncHash.WPFControl_tbUsername.Add_KeyDown{
     param(
         [Parameter(Mandatory)][Object]$sender,
         [Parameter(Mandatory)][Windows.Input.KeyEventArgs]$e
@@ -743,97 +789,98 @@ $WPFControl_tbUsername.Add_KeyDown{
     if ($e.Key -eq "Return") {
         Write-Verbose "Enter"
         Update-Gui
-        Execute-SearchADUser
+        Invoke-SearchADUser
     }
 }
 
 
-$WPFControl_tbAttribute.add_TextChanged( 
+$SyncHash.WPFControl_tbAttribute.add_TextChanged( 
     { 
         Write-Verbose "tbAttribute Text Changed"
-        $Script:Attribute = $WPFControl_tbAttribute.Text
+        $SyncHash.Attribute = $SyncHash.WPFControl_tbAttribute.Text
     }
 )
 
-$WPFControl_tbDeviceName.add_TextChanged( 
+$SyncHash.WPFControl_tbDeviceName.add_TextChanged( 
     { 
         Write-Verbose "tbDeviceName Text Changed"
         Update-Gui
-        Validate-AddSecret
-        Validate-GenerateQR
+        Invoke-ValidateAddSecret
+        Invoke-ValidateGUIQR
     }
 )
 
-$WPFControl_tbGateway.add_TextChanged( 
+$SyncHash.WPFControl_tbGateway.add_TextChanged( 
     { 
         Write-Verbose "tbGateway Text Changed"
         Update-Gui
-        Validate-AddSecret
-        Validate-GenerateQR
+        Invoke-ValidateAddSecret
+        Invoke-ValidateGUIQR
     }
 )
-$WPFControl_tbSecret.add_TextChanged( 
+$SyncHash.WPFControl_tbSecret.add_TextChanged( 
     { 
         Write-Verbose "tbSecret Text Changed"
         Update-Gui
-        Validate-AddSecret
-        Validate-GenerateQR
+        Invoke-ValidateAddSecret
+        Invoke-ValidateGUIQR
     }
 )
 
-$WPFControl_btnSearch.Add_Click( 
+$SyncHash.WPFControl_btnSearch.Add_Click( 
     { # btnSearch Click Action
         Update-Gui
-        Execute-SearchADUser
+        Invoke-SearchADUser
     }
 )
 
-$WPFControl_lvUsernames.add_SelectionChanged( { 
+$SyncHash.WPFControl_lvUsernames.add_SelectionChanged( { 
         Write-Verbose "lvUsernames Selection Changed"
         Update-Gui
-        Clean-GUIQR
-        $SelectedItem = $WPFControl_lvUsernames.SelectedItem
+        Invoke-CleanGUIQR
+        $SelectedItem = $SyncHash.WPFControl_lvUsernames.SelectedItem
         if (-Not [String]::IsNullOrEmpty($($SelectedItem.Attribute))) {
-            $Script:DeviceSecrets = @()
-            $Script:DeviceSecrets += Extract-Attribute -Data $SelectedItem.Attribute
-            $WPFControl_lvOtps.ItemsSource = $Script:DeviceSecrets
-            if (-Not $WPFControl_tbDeviceName.IsEnabled) { $WPFControl_tbDeviceName.IsEnabled = $true }
-            if (-Not $WPFControl_btnLoadOtp.IsEnabled) { $WPFControl_btnLoadOtp.IsEnabled = $true }
+            $SyncHash.DeviceSecrets = @()
+            $SyncHash.DeviceSecrets += ConvertFrom-Attribute -Data $SelectedItem.Attribute
+            $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncHash.DeviceSecrets
+            if (-Not $SyncHash.WPFControl_tbDeviceName.IsEnabled) { $SyncHash.WPFControl_tbDeviceName.IsEnabled = $true }
+            if (-Not $SyncHash.WPFControl_btnLoadOtp.IsEnabled) { $SyncHash.WPFControl_btnLoadOtp.IsEnabled = $true }
         } else {
-            $WPFControl_lvOtps.ItemsSource = $null
-            if ($WPFControl_tbDeviceName.IsEnabled) { $WPFControl_tbDeviceName.IsEnabled = $false }
-            if ($WPFControl_btnLoadOtp.IsEnabled) { $WPFControl_btnLoadOtp.IsEnabled = $false }
+            $SyncHash.WPFControl_lvOtps.ItemsSource = $null
+            if ($SyncHash.WPFControl_tbDeviceName.IsEnabled) { $SyncHash.WPFControl_tbDeviceName.IsEnabled = $false }
+            if ($SyncHash.WPFControl_btnLoadOtp.IsEnabled) { $SyncHash.WPFControl_btnLoadOtp.IsEnabled = $false }
         }
         
         
     }
 )
 
-$WPFControl_lvOtps.add_SelectionChanged( { 
+$SyncHash.WPFControl_lvOtps.add_SelectionChanged( { 
         Write-Verbose "lvOtps Selection Changed" 
+        Invoke-CleanTOTPToken
         Update-Gui
-        $SelectedItem = $WPFControl_lvOtps.SelectedItem
+        $SelectedItem = $SyncHash.WPFControl_lvOtps.SelectedItem
         Write-Verbose "Selected item: $SelectedItem"
-        $Script:B32Secret = $SelectedItem.Secret
+        $SyncHash.B32Secret = $SelectedItem.Secret
         if ([String]::IsNullOrEmpty($($SelectedItem.Secret))) {
-            if ($WPFControl_btnDeleteOtp.IsEnabled) { $WPFControl_btnDeleteOtp.IsEnabled = $false }
+            if ($SyncHash.WPFControl_btnDeleteOtp.IsEnabled) { $SyncHash.WPFControl_btnDeleteOtp.IsEnabled = $false }
         } else {
-            if (-Not $WPFControl_btnDeleteOtp.IsEnabled) { $WPFControl_btnDeleteOtp.IsEnabled = $true }
-            if (-Not $WPFControl_gbToken.IsEnabled) { $WPFControl_gbToken.IsEnabled = $true }
+            if (-Not $SyncHash.WPFControl_btnDeleteOtp.IsEnabled) { $SyncHash.WPFControl_btnDeleteOtp.IsEnabled = $true }
+            if (-Not $SyncHash.WPFControl_gbToken.IsEnabled) { $SyncHash.WPFControl_gbToken.IsEnabled = $true }
         }
     }
 )
 
-$WPFControl_btnGenerateQR.Add_Click( { # btnGenerateQR Click Action
+$SyncHash.WPFControl_btnGenerateQR.Add_Click( { # btnGenerateQR Click Action
         Update-Gui
-        Clean-GUIQRImage
+        Invoke-CleanGUIQRImage
         if ($QRGeneration) {
-            Load-QR
+            Get-GUIQRImage
             Update-Gui
-            $SelectedItem = $WPFControl_lvUsernames.SelectedItem
+            $SelectedItem = $SyncHash.WPFControl_lvUsernames.SelectedItem
             $SamAccountName = $SelectedItem.SamAccountName
-            $DeviceName = $WPFControl_tbDeviceName.Text
-            $Target = $WPFControl_tbGateway.Text
+            $DeviceName = $SyncHash.WPFControl_tbDeviceName.Text
+            $Target = $SyncHash.WPFControl_tbGateway.Text
             $NetBIOSName = $SelectedItem.NetBIOSName
             
             $OTPUri = "otpauth://totp/"
@@ -841,7 +888,7 @@ $WPFControl_btnGenerateQR.Add_Click( { # btnGenerateQR Click Action
             #$OTPUri += [Uri]::EscapeDataString($("{0}@{1}@{2}" -f $NetBIOSName,$SamAccountName,$Target))
             #Current 13.0 generation
             $OTPUri += [Uri]::EscapeDataString($("{0}@{1}" -f $SamAccountName, $Target))
-            $OTPUri += "?secret={0}&device={1}" -f $Script:B32Secret, $DeviceName
+            $OTPUri += "?secret={0}&device={1}" -f $SyncHash.B32Secret, $DeviceName
             Write-Verbose "OTP Uri: $OTPUri"
             $Script:QRImage = New-QRCodeURI -URI $OTPUri -OutStream
             #$ImgSource = New-Object System.Drawing.Bitmap($QRImage)
@@ -850,11 +897,11 @@ $WPFControl_btnGenerateQR.Add_Click( { # btnGenerateQR Click Action
             
             $QRImageSource = New-Object System.Windows.Media.Imaging.BitmapImage
             $QRImageSource.BeginInit()
-            $QRImageSource.StreamSource = $QRImage
+            $QRImageSource.StreamSource = $Script:QRImage
             $QRImageSource.EndInit() 
             #$QRImageSource.Freeze()
-            $WPFControl_ImgQR.Source = $QRImageSource
-            $Script:Saved = $false
+            $SyncHash.WPFControl_ImgQR.Source = $QRImageSource
+            $SyncHash.Saved = $false
             Show-QR
         } else {
             $null = [System.Windows.MessageBox]::Show("The PowerShell Module `"QRCodeGenerator`" was NOT Found!`nQR Code generation is disabled.", "QRCodeGenerator Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Exclamation)
@@ -862,32 +909,34 @@ $WPFControl_btnGenerateQR.Add_Click( { # btnGenerateQR Click Action
     }
 )
 
-$WPFControl_btnExportQR.Add_Click( {
+$SyncHash.WPFControl_btnExportQR.Add_Click( {
         # btnExportQR Click Action
         try {
-            $SelectedItem = $WPFControl_lvUsernames.SelectedItem
-            $PNGPath = Save-File -FileName $("{0}_{1}_{2}.png" -f $SelectedItem.SamAccountName, $WPFControl_tbDeviceName.text, $WPFControl_tbGateway.text)
+            $SelectedItem = $SyncHash.WPFControl_lvUsernames.SelectedItem
+            $PNGPath = Save-File -FileName $("{0}_{1}_{2}.png" -f $SelectedItem.SamAccountName, $SyncHash.WPFControl_tbDeviceName.text, $SyncHash.WPFControl_tbGateway.text)
             Write-Verbose "PNGPath: $PNGPath"
             if (Test-Path (Split-Path -Path $PNGPath -Parent | Resolve-Path).Path) {
                 [System.IO.File]::WriteAllBytes($PNGPath, $($Script:QRImage.ToArray()))
-                $WPFControl_lblQR.Content = "Exported Successfully!"
+                $SyncHash.WPFControl_lblQR.Content = "Exported Successfully!"
             } else {
-                $WPFControl_lblQR.Content = "Export Failed!"
+                $SyncHash.WPFControl_lblQR.Content = "Export Failed!"
             }
         } catch {
             Write-Verbose "$($_.Exception.Message)"
-            $WPFControl_lblQR.Content = "Export Failed!"
+            $SyncHash.WPFControl_lblQR.Content = "Export Failed!"
         }
     }
 )
 
-$WPFControl_btnViewTOTPToken.Add_Click( {
+$SyncHash.WPFControl_btnViewTOTPToken.Add_Click( {
         # btnViewTOTPToken Click Action
         Write-Verbose "btnViewTOTPToken Click"
         try {
-            $Script:OTPToken = Get-OTPToken -B32Secret $Script:B32Secret
-            $WPFControl_tbTOTPToken.Text = $Script:OTPToken.OTP
-            Write-Verbose  $Script:OTPToken
+            $SyncHash.OTPToken = Get-OTPToken -B32Secret $SyncHash.B32Secret -TimeWindow $SyncHash.OTPTimeWindow -OTPLength $SyncHash.OTPLength
+            $SyncHash.WPFControl_tbTOTPToken.Text = $SyncHash.OTPToken.OTP
+            $SyncHash.OTPUpdate = $true
+            $handle = $PoSH.BeginInvoke()
+            Write-Verbose  $SyncHash.OTPToken
         } catch {
             Write-Verbose "$($_.Exception.Message)"
         }
@@ -897,4 +946,7 @@ $WPFControl_btnViewTOTPToken.Add_Click( {
 #endregion Event handlers
 
 # Show/Run the App
-$App.Run($Form)
+$SyncHash.App.Run($SyncHash.Form)
+try { $PoSH.EndInvoke($handle) } catch { }
+$RunSpace.Close()
+$PoSH.Dispose()
