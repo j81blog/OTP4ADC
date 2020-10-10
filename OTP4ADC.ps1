@@ -22,7 +22,7 @@
     Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v0.3.0
+    Version   : v0.3.1
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -42,7 +42,7 @@ Param(
     
     [Switch]$Console
 )
-
+$AppVersion = "v0.3.1"
 function New-QRCodeURI {
     <#
         .SYNOPSIS
@@ -945,6 +945,8 @@ $SyncHash.WPFControl_btnViewTOTPToken.Add_Click( {
 
 #endregion Event handlers
 
+#Set Title
+$SyncHash.Form.Title = "OTP4ADC - $AppVersion"
 # Show/Run the App
 $SyncHash.App.Run($SyncHash.Form)
 try { $PoSH.EndInvoke($handle) } catch { }
