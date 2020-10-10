@@ -22,7 +22,7 @@
     Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v0.2.1
+    Version   : v0.2.2
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -144,46 +144,60 @@ function Generate-OTPSecret {
     }
     return $secret
 }
-
-function New-AuthenticatorSecret {
+function Convert-B32toByte {
     [CmdletBinding()]
-    Param(
-        # Secret length in bytes, must be a multiple of 5 bits for neat BASE32 encoding
-        [int]
-        [ValidateScript( { ($_ * 8) % 5 -eq 0 })]
-        $SecretLength = 15
+    param (
+        [Parameter(Mandatory = $true)]
+        [String]$Value
     )
-    Write-Verbose "Function: New-AuthenticatorSecret"
-
-
-    $Base32Charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
-
-    # Generate random bytes for the secret
-    $byteArrayForSecret = [byte[]]::new($SecretLength)
-    [Security.Cryptography.RNGCryptoServiceProvider]::new().GetBytes($byteArrayForSecret, 0, $SecretLength)
-    
-
-    # BASE32 encode the bytes
-    # 5 bits per character doesn't align with 8-bits per byte input,
-    # and needs careful code to take some bits from separate bytes.
-    # Because we're in a scripting language let's dodge that work.
-    # Instead, convert the bytes to a 10100011 style string:
-    $byteArrayAsBinaryString = -join $byteArrayForSecret.ForEach{
-        [Convert]::ToString($_, 2).PadLeft(8, '0')
+    $Base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    $Binary = ""
+    $CharacterArray = $Value.ToUpper().ToCharArray()
+    foreach ($Character in $CharacterArray) {
+        $Binary += [Convert]::ToString($Base32Chars.IndexOf($Character), 2).PadLeft(5, "0")
     }
-
-
-    # then use regex to get groups of 5 bits 
-    # -> conver those to integer 
-    # -> lookup that as an index into the BASE32 character set 
-    # -> result string
-    $Base32Secret = [regex]::Replace($byteArrayAsBinaryString, '.{5}', {
-            param($Match)
-            $Base32Charset[[Convert]::ToInt32($Match.Value, 2)]
-        })
-
-    return $Base32Secret
+    for ($i = 0; $i -le ($Binary.Length - 8); $i += 8) {
+        [Byte][Convert]::ToInt32($Binary.Substring($i, 8), 2)
+    }
 }
+
+function Get-OTPToken {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [String]$B32Secret,
+
+        # TOTP Token Length
+        [Int]$OTPLength = 6,
+
+        # OTP time window in seconds
+        [Int]$TimeWindow = 30 
+    )
+    #Unix epoch time in UTC
+    $EpochTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $KeyedHashAlgorithm = New-Object -TypeName "System.Security.Cryptography.HMACSHA1"
+    try {
+        $KeyedHashAlgorithm.Key = Convert-B32toByte -Value $B32Secret
+        $CalculatedInterval = [BitConverter]::GetBytes([int64][math]::Floor($epochTime / $TimeWindow))
+        if ([BitConverter]::IsLittleEndian) { [array]::Reverse($CalculatedInterval) }
+        $CompHash = $KeyedHashAlgorithm.ComputeHash($CalculatedInterval)
+        $Offset = $CompHash[($CompHash.Length - 1)] -band 0xf
+        $fullOTP = ($CompHash[$offset] -band 0x7f) * [math]::pow(2, 24)
+        $fullOTP += ($CompHash[$offset + 1] -band 0xff) * [math]::pow(2, 16)
+        $fullOTP += ($CompHash[$offset + 2] -band 0xff) * [math]::pow(2, 8)
+        $fullOTP += ($CompHash[$offset + 3] -band 0xff)
+        $OTPToken = ($fullOTP % ([math]::pow(10, $OTPLength))).ToString("0" * $OTPLength)
+        return [PSCustomObject]@{
+            OTP       = $OTPToken
+            Remaining = ($TimeWindow - ($epochTime % $TimeWindow))
+            ValidTo   = (Get-Date).AddSeconds(($TimeWindow - ($epochTime % $TimeWindow)))
+        }
+    } catch {
+        Write-Verbose "Error: $($_.Exception.Message)"
+        return $null
+    }
+}
+
 function Save-File {
     [CmdletBinding()]
     Param(
@@ -318,7 +332,14 @@ function Clean-GUIUser {
         if ($WPFControl_btnExportPosh.IsEnabled) { $WPFControl_btnExportPosh.IsEnabled = $false }
         $Script:Saved = $true
         Clean-GUIQR
+        Clean-TOTPToken
     }
+}
+
+function Clean-TOTPToken {
+    if ($WPFControl_gbToken.IsEnabled) { $WPFControl_gbToken.IsEnabled = $false }
+    $WPFControl_tbTOTPToken.Text = "------"
+    $WPFControl_pbTOTPToken.Value = 0
 }
 
 function Clean-GUIQR {
@@ -436,7 +457,6 @@ function Execute-SearchADUser {
     } else {
         $Results = Search-User -Name $WPFControl_tbUsername.Text
         $WPFControl_lvUsernames.ItemsSource = @($Results)
-        Write-Verbose
         if ($WPFControl_lvUsernames.Items.Count -eq 1) {
             $WPFControl_lvUsernames.SelectedIndex = 0
         }
@@ -564,7 +584,7 @@ Add-Type -AssemblyName PresentationFramework
 
 #[System.Convert]::ToBase64String([system.Text.Encoding]::UTF8.GetBytes($(Get-Content -Path "C:\Users\John.Billekens\stack\Visual Studio\Repo\OTP4ADC\OTP4ADC\OTP4ADC\MainWindow.xaml" -Raw))) | clip.exe
 $XAMLDataB64 = @"
-PFdpbmRvdyB4OkNsYXNzPSJPVFA0QURDLk1haW5XaW5kb3ciDQogICAgICAgIHhtbG5zPSJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dpbmZ4LzIwMDYveGFtbC9wcmVzZW50YXRpb24iDQogICAgICAgIHhtbG5zOng9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vd2luZngvMjAwNi94YW1sIg0KICAgICAgICB4bWxuczpkPSJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL2V4cHJlc3Npb24vYmxlbmQvMjAwOCINCiAgICAgICAgeG1sbnM6bWM9Imh0dHA6Ly9zY2hlbWFzLm9wZW54bWxmb3JtYXRzLm9yZy9tYXJrdXAtY29tcGF0aWJpbGl0eS8yMDA2Ig0KICAgICAgICB4bWxuczpsb2NhbD0iY2xyLW5hbWVzcGFjZTpPVFA0QURDIg0KICAgICAgICBtYzpJZ25vcmFibGU9ImQiIA0KICAgICAgICBUaXRsZT0iT1RQNEFEQyIgU2l6ZVRvQ29udGVudD0iV2lkdGhBbmRIZWlnaHQiIFJlc2l6ZU1vZGU9Ik5vUmVzaXplIiBIZWlnaHQ9IkF1dG8iIFdpZHRoPSJBdXRvIj4NCiAgICA8R3JpZCBNYXJnaW49IjIiPg0KICAgICAgICA8R3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgPC9HcmlkLlJvd0RlZmluaXRpb25zPg0KICAgICAgICA8R3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgICAgIDxDb2x1bW5EZWZpbml0aW9uIFdpZHRoPSJBdXRvIi8+DQogICAgICAgICAgICA8Q29sdW1uRGVmaW5pdGlvbiBXaWR0aD0iQXV0byIvPg0KICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgPC9HcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICA8R3JvdXBCb3ggTmFtZT0iZ2JVc2VyIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjAiIEhlYWRlcj0iVXNlciIgSGVpZ2h0PSJBdXRvIiBNYXJnaW49IjIiIFdpZHRoPSJBdXRvIj4NCiAgICAgICAgICAgIDxHcmlkIE1hcmdpbj0iNSI+DQogICAgICAgICAgICAgICAgPEdyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgIDwvR3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICA8R3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICA8L0dyaWQuQ29sdW1uRGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibFVzZXJuYW1lIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iODAiIE1hcmdpbj0iMiIgQ29udGVudD0iVXNlcm5hbWUiIC8+DQogICAgICAgICAgICAgICAgPFRleHRCb3ggTmFtZT0idGJVc2VybmFtZSIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIxIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBUZXh0PSIiIFdpZHRoPSIzMjAiIFRvb2xUaXA9IkVudGVyIHRoZSBVc2VybmFtZSBvciBwYXJ0IG9mIHRoZSB1c2VybmFtZSIgVGFiSW5kZXg9IjEwIiAvPg0KICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuU2VhcmNoIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjIiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IlNlYXJjaCIgV2lkdGg9IjEwMCIgSGVpZ2h0PSJBdXRvIiBUYWJJbmRleD0iMjAiIC8+DQogICAgICAgICAgICAgICAgPExpc3RWaWV3IE5hbWU9Imx2VXNlcm5hbWVzIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjEiIEdyaWQuUm93U3Bhbj0iMiIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJUb3AiIE1hcmdpbj0iMiIgSGVpZ2h0PSIxNTAiIFdpZHRoPSIzMjAiIEZvbnRTaXplPSI4IiBTZWxlY3Rpb25Nb2RlPSJTaW5nbGUiIFRhYkluZGV4PSIzMCIgPg0KICAgICAgICAgICAgICAgICAgICA8TGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDxHcmlkVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTYW1BY2NvdW50TmFtZSIgRGlzcGxheU1lbWJlckJpbmRpbmc9IntCaW5kaW5nIFNhbUFjY291bnROYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJVUE4iIERpc3BsYXlNZW1iZXJCaW5kaW5nPSJ7QmluZGluZyBVc2VyUHJpbmNpcGFsTmFtZX0iIC8+DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgPEdyaWRWaWV3Q29sdW1uIEhlYWRlcj0iR2l2ZW5OYW1lIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgR2l2ZW5OYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTdXJuYW1lIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgU3VybmFtZX0iIC8+DQogICAgICAgICAgICAgICAgICAgICAgICA8L0dyaWRWaWV3Pg0KICAgICAgICAgICAgICAgICAgICA8L0xpc3RWaWV3LlZpZXc+DQoNCiAgICAgICAgICAgICAgICA8L0xpc3RWaWV3Pg0KDQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5DbGVhciIgR3JpZC5Sb3c9IjEiIEdyaWQuQ29sdW1uPSIyIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJDbGVhciIgV2lkdGg9IjEwMCIgVmVydGljYWxBbGlnbm1lbnQ9IlRvcCIgSGVpZ2h0PSIyNyIgIC8+DQoNCiAgICAgICAgICAgICAgICA8TGFiZWwgTmFtZT0ibGJsQXR0cmlidXRlIiBHcmlkLlJvdz0iMyIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iVG9wIiBNYXJnaW49IjIiIENvbnRlbnQ9IkF0dHJpYnV0ZSIgV2lkdGg9IjkwIiAvPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiQXR0cmlidXRlIiBHcmlkLlJvdz0iMyIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9IiIgV2lkdGg9IjMyMCIgVG9vbFRpcD0iQ2FuIGJlIHByZS1jb25maWd1cmVkIGJ5IHN0YXJ0aW5nIHRoZSBhcHBsaWNhdGlvbiB3aXRoIHRoZSAtQXR0cmlidXRlICcmbHQ7QUQgQXR0cmlidXRlJmd0OycgcGFyYW1ldGVyLCBpZiBub3QgY29uZmlndXJlZCBpdCB1c2VzIHRoZSBkZWZhdWx0ICd1c2VyUGFyYW1ldGVycyciIC8+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibE90cCIgR3JpZC5Sb3c9IjQiIEdyaWQuQ29sdW1uPSIwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IlRvcCIgTWFyZ2luPSIyIiBDb250ZW50PSJPVFAiIFdpZHRoPSI5MCIgIFZlcnRpY2FsQWxpZ25tZW50PSJUb3AiLz4NCiAgICAgICAgICAgICAgICA8TGlzdFZpZXcgTmFtZT0ibHZPdHBzIiBHcmlkLlJvdz0iNCIgR3JpZC5Db2x1bW49IjEiIEdyaWQuUm93U3Bhbj0iMyIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJUb3AiIE1hcmdpbj0iMiIgIFdpZHRoPSIzMjAiIEZvbnRTaXplPSI4IiBTZWxlY3Rpb25Nb2RlPSJTaW5nbGUiIEhlaWdodD0iQXV0byIgVGFiSW5kZXg9IjQwIiAgPg0KICAgICAgICAgICAgICAgICAgICA8TGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDxHcmlkVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJEZXZpY2UgTmFtZSIgV2lkdGg9IkF1dG8iIERpc3BsYXlNZW1iZXJCaW5kaW5nPSJ7QmluZGluZyBEZXZpY2VOYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTZWNyZXQiIFdpZHRoPSJBdXRvIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgU2VjcmV0fSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDwvR3JpZFZpZXc+DQogICAgICAgICAgICAgICAgICAgIDwvTGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICA8L0xpc3RWaWV3Pg0KICAgICAgICAgICAgICAgIDxTdGFja1BhbmVsIEdyaWQuUm93PSI0IiBHcmlkLkNvbHVtbj0iMiIgR3JpZC5Sb3dTcGFuPSIzIiBIb3Jpem9udGFsQWxpZ25tZW50PSJTdHJldGNoIiBWZXJ0aWNhbEFsaWdubWVudD0iU3RyZXRjaCIgPg0KICAgICAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0bkRlbGV0ZU90cCIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iRGVsZXRlIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iVG9wIiBIZWlnaHQ9IjI3IiAvPg0KICAgICAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0blNhdmVPdHAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IlNhdmUiIFdpZHRoPSIxMDAiIFZlcnRpY2FsQWxpZ25tZW50PSJUb3AiIEhlaWdodD0iMjciIC8+DQogICAgICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuRXhwb3J0UG9zaCIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iRXhwb3J0IFBvU0giIFdpZHRoPSIxMDAiIFZlcnRpY2FsQWxpZ25tZW50PSJUb3AiIEhlaWdodD0iMjciIFRvb2xUaXA9IkV4cG9ydCB0aGUgUG93ZXJTaGVsbCBjb21tYW5kIHRvIG1ha2UgdGhlIG5lY2Vzc2FyeSBjaGFuZ2VzLiIgLz4NCiAgICAgICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5Mb2FkT3RwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJMb2FkIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iVG9wIiBIZWlnaHQ9IjI3IiBUYWJJbmRleD0iNTAiIC8+DQogICAgICAgICAgICAgICAgPC9TdGFja1BhbmVsPg0KICAgICAgICAgICAgICAgIA0KICAgICAgICAgICAgPC9HcmlkPg0KICAgICAgICA8L0dyb3VwQm94Pg0KICAgICAgICA8R3JvdXBCb3ggR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIxIiBIZWFkZXI9IlFSIiBIZWlnaHQ9IkF1dG8iIE1hcmdpbj0iMiIgV2lkdGg9IkF1dG8iPg0KICAgICAgICAgICAgPEdyaWQgTWFyZ2luPSI1Ij4NCiAgICAgICAgICAgICAgICA8R3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICA8L0dyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgPEdyaWQuQ29sdW1uRGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxDb2x1bW5EZWZpbml0aW9uIFdpZHRoPSJBdXRvIi8+DQogICAgICAgICAgICAgICAgPC9HcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgIDxJbWFnZSBOYW1lPSJJbWdRUiIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIwIiBNYXJnaW49IjIiIEhlaWdodD0iMjAwIiBXaWR0aD0iMjAwIiBWaXNpYmlsaXR5PSJWaXNpYmxlIiBTdHJldGNoPSJVbmlmb3JtVG9GaWxsIiBSZW5kZXJUcmFuc2Zvcm1PcmlnaW49IjAuNSwwLjUiIC8+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibFFSIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjAiIE1hcmdpbj0iMiIgQ29udGVudD0iIiBWZXJ0aWNhbEFsaWdubWVudD0iQm90dG9tIiBIb3Jpem9udGFsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgVmlzaWJpbGl0eT0iVmlzaWJsZSIgRm9udFdlaWdodD0iQm9sZCIgRm9udFNpemU9IjE2Ii8+DQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5FeHBvcnRRUiIgR3JpZC5Sb3c9IjIiIEdyaWQuQ29sdW1uPSIwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJFeHBvcnQgUVIiIFdpZHRoPSIxMDAiIFZlcnRpY2FsQWxpZ25tZW50PSJCb3R0b20iIEhlaWdodD0iMjciIFRhYkluZGV4PSIxMDAiIC8+DQogICAgICAgICAgICA8L0dyaWQ+DQogICAgICAgIDwvR3JvdXBCb3g+DQogICAgICAgIDxHcm91cEJveCBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjAiIEhlYWRlcj0iVE9UUCIgSGVpZ2h0PSJhdXRvIiBNYXJnaW49IjIiIFdpZHRoPSJBdXRvIj4NCiAgICAgICAgICAgIDxHcmlkIE1hcmdpbj0iNSI+DQogICAgICAgICAgICAgICAgPEdyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgPC9HcmlkLlJvd0RlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgIDxHcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgICAgICA8Q29sdW1uRGVmaW5pdGlvbiBXaWR0aD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Q29sdW1uRGVmaW5pdGlvbiBXaWR0aD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Q29sdW1uRGVmaW5pdGlvbiBXaWR0aD0iQXV0byIvPg0KICAgICAgICAgICAgICAgIDwvR3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICA8TGFiZWwgTmFtZT0ibGJsU2VjcmV0IiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iOTAiIE1hcmdpbj0iMiIgQ29udGVudD0iU2VjcmV0IiAvPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiU2VjcmV0IiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9IiIgV2lkdGg9IjMyMCIgSXNSZWFkT25seT0iVHJ1ZSIgLz4NCiAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0bkdlbmVyYXRlU2VjcmV0IiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjIiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IkdlbmVyYXRlIFNlY3JldCIgV2lkdGg9IjEwMCIgVGFiSW5kZXg9IjYwIiAvPg0KICAgICAgICAgICAgICAgIDxMYWJlbCBOYW1lPSJsYmxEZXZpY2VOYW1lIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iOTAiIE1hcmdpbj0iMiIgQ29udGVudD0iRGV2aWNlIE5hbWUiIC8+DQogICAgICAgICAgICAgICAgPFRleHRCb3ggTmFtZT0idGJEZXZpY2VOYW1lIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9IiIgV2lkdGg9IjMyMCIgVGFiSW5kZXg9IjcwIiAvPg0KICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuQWRkUVIiIEdyaWQuUm93PSIxIiBHcmlkLkNvbHVtbj0iMiIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iQWRkIiBXaWR0aD0iMTAwIiAvPg0KICAgICAgICAgICAgICAgIDxMYWJlbCBOYW1lPSJsYmxHYXRld2F5IiBHcmlkLlJvdz0iMiIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iOTAiIE1hcmdpbj0iMiIgQ29udGVudD0iR2F0ZXdheSBmcWRuIiAvPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiR2F0ZXdheSIgR3JpZC5Sb3c9IjIiIEdyaWQuQ29sdW1uPSIxIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBUZXh0PSIiIFdpZHRoPSIzMjAiIFRvb2xUaXA9IkNhbiBiZSBwcmUtY29uZmlndXJlZCBieSBzdGFydGluZyB0aGUgYXBwbGljYXRpb24gd2l0aCB0aGUgLUdhdGV3YXlVcmkgJyZsdDtndy5kb21haW4uY29tJmd0OycgcGFyYW1ldGVyIiBUYWJJbmRleD0iODAiIC8+DQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5HZW5lcmF0ZVFSIiBHcmlkLlJvdz0iMiIgR3JpZC5Db2x1bW49IjIiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IkdlbmVyYXRlIFFSIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iVG9wIiBIZWlnaHQ9IjI3IiBUYWJJbmRleD0iOTAiIC8+DQogICAgICAgICAgICA8L0dyaWQ+DQogICAgICAgIDwvR3JvdXBCb3g+DQogICAgICAgIDxJbWFnZSBOYW1lPSJBcHBJbWFnZSIgIEdyaWQuQ29sdW1uPSIxIiAgR3JpZC5Sb3c9IjEiIEhvcml6b250YWxBbGlnbm1lbnQ9IlJpZ2h0IiBIZWlnaHQ9IjEwMCIgVmVydGljYWxBbGlnbm1lbnQ9IkJvdHRvbSIgV2lkdGg9IjEwMCIvPg0KICAgIDwvR3JpZD4NCjwvV2luZG93Pg0K
+PFdpbmRvdyB4OkNsYXNzPSJPVFA0QURDLk1haW5XaW5kb3ciDQogICAgICAgIHhtbG5zPSJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dpbmZ4LzIwMDYveGFtbC9wcmVzZW50YXRpb24iDQogICAgICAgIHhtbG5zOng9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vd2luZngvMjAwNi94YW1sIg0KICAgICAgICB4bWxuczpkPSJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL2V4cHJlc3Npb24vYmxlbmQvMjAwOCINCiAgICAgICAgeG1sbnM6bWM9Imh0dHA6Ly9zY2hlbWFzLm9wZW54bWxmb3JtYXRzLm9yZy9tYXJrdXAtY29tcGF0aWJpbGl0eS8yMDA2Ig0KICAgICAgICB4bWxuczpsb2NhbD0iY2xyLW5hbWVzcGFjZTpPVFA0QURDIg0KICAgICAgICBtYzpJZ25vcmFibGU9ImQiIA0KICAgICAgICBUaXRsZT0iT1RQNEFEQyIgU2l6ZVRvQ29udGVudD0iV2lkdGhBbmRIZWlnaHQiIFJlc2l6ZU1vZGU9Ik5vUmVzaXplIiBIZWlnaHQ9IkF1dG8iIFdpZHRoPSJBdXRvIj4NCiAgICA8R3JpZCBNYXJnaW49IjIiPg0KICAgICAgICA8R3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICA8L0dyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgIDxHcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgIDxDb2x1bW5EZWZpbml0aW9uIFdpZHRoPSJBdXRvIi8+DQogICAgICAgIDwvR3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgPEdyb3VwQm94IE5hbWU9ImdiVXNlciIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIwIiBHcmlkLlJvd1NwYW49IjIiIEhlYWRlcj0iVXNlciIgSGVpZ2h0PSJBdXRvIiBNYXJnaW49IjIiIFdpZHRoPSJBdXRvIj4NCiAgICAgICAgICAgIDxHcmlkIE1hcmdpbj0iMyI+DQogICAgICAgICAgICAgICAgPEdyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgIDwvR3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICA8R3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPENvbHVtbkRlZmluaXRpb24gV2lkdGg9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICA8L0dyaWQuQ29sdW1uRGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibFVzZXJuYW1lIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iODAiIE1hcmdpbj0iMiIgQ29udGVudD0iVXNlcm5hbWUiIC8+DQogICAgICAgICAgICAgICAgPFRleHRCb3ggTmFtZT0idGJVc2VybmFtZSIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIxIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBUZXh0PSIiIFdpZHRoPSIzMjAiIFRvb2xUaXA9IkVudGVyIHRoZSBVc2VybmFtZSBvciBwYXJ0IG9mIHRoZSB1c2VybmFtZSIgVGFiSW5kZXg9IjEwIiAvPg0KICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuU2VhcmNoIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjIiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IlNlYXJjaCIgV2lkdGg9IjEwMCIgSGVpZ2h0PSJBdXRvIiBUYWJJbmRleD0iMjAiIC8+DQogICAgICAgICAgICAgICAgPExpc3RWaWV3IE5hbWU9Imx2VXNlcm5hbWVzIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjEiIEdyaWQuUm93U3Bhbj0iMiIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJUb3AiIE1hcmdpbj0iMiIgSGVpZ2h0PSIxNTAiIFdpZHRoPSIzMjAiIEZvbnRTaXplPSI4IiBTZWxlY3Rpb25Nb2RlPSJTaW5nbGUiIFRhYkluZGV4PSIzMCIgPg0KICAgICAgICAgICAgICAgICAgICA8TGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDxHcmlkVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTYW1BY2NvdW50TmFtZSIgRGlzcGxheU1lbWJlckJpbmRpbmc9IntCaW5kaW5nIFNhbUFjY291bnROYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJVUE4iIERpc3BsYXlNZW1iZXJCaW5kaW5nPSJ7QmluZGluZyBVc2VyUHJpbmNpcGFsTmFtZX0iIC8+DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgPEdyaWRWaWV3Q29sdW1uIEhlYWRlcj0iR2l2ZW5OYW1lIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgR2l2ZW5OYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTdXJuYW1lIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgU3VybmFtZX0iIC8+DQogICAgICAgICAgICAgICAgICAgICAgICA8L0dyaWRWaWV3Pg0KICAgICAgICAgICAgICAgICAgICA8L0xpc3RWaWV3LlZpZXc+DQoNCiAgICAgICAgICAgICAgICA8L0xpc3RWaWV3Pg0KDQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5DbGVhciIgR3JpZC5Sb3c9IjEiIEdyaWQuQ29sdW1uPSIyIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJDbGVhciIgV2lkdGg9IjEwMCIgVmVydGljYWxBbGlnbm1lbnQ9IlRvcCIgSGVpZ2h0PSIyNyIgIC8+DQoNCiAgICAgICAgICAgICAgICA8TGFiZWwgTmFtZT0ibGJsQXR0cmlidXRlIiBHcmlkLlJvdz0iMyIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iVG9wIiBNYXJnaW49IjIiIENvbnRlbnQ9IkF0dHJpYnV0ZSIgV2lkdGg9IjkwIiAvPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiQXR0cmlidXRlIiBHcmlkLlJvdz0iMyIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9IiIgV2lkdGg9IjMyMCIgVG9vbFRpcD0iQ2FuIGJlIHByZS1jb25maWd1cmVkIGJ5IHN0YXJ0aW5nIHRoZSBhcHBsaWNhdGlvbiB3aXRoIHRoZSAtQXR0cmlidXRlICcmbHQ7QUQgQXR0cmlidXRlJmd0OycgcGFyYW1ldGVyLCBpZiBub3QgY29uZmlndXJlZCBpdCB1c2VzIHRoZSBkZWZhdWx0ICd1c2VyUGFyYW1ldGVycyciIC8+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibE90cCIgR3JpZC5Sb3c9IjQiIEdyaWQuQ29sdW1uPSIwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IlRvcCIgTWFyZ2luPSIyIiBDb250ZW50PSJPVFAiIFdpZHRoPSI5MCIgIFZlcnRpY2FsQWxpZ25tZW50PSJUb3AiLz4NCiAgICAgICAgICAgICAgICA8TGlzdFZpZXcgTmFtZT0ibHZPdHBzIiBHcmlkLlJvdz0iNCIgR3JpZC5Db2x1bW49IjEiIEdyaWQuUm93U3Bhbj0iMyIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJUb3AiIE1hcmdpbj0iMiIgIFdpZHRoPSIzMjAiIEZvbnRTaXplPSI4IiBTZWxlY3Rpb25Nb2RlPSJTaW5nbGUiIEhlaWdodD0iQXV0byIgVGFiSW5kZXg9IjQwIiAgPg0KICAgICAgICAgICAgICAgICAgICA8TGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDxHcmlkVmlldz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJEZXZpY2UgTmFtZSIgV2lkdGg9IkF1dG8iIERpc3BsYXlNZW1iZXJCaW5kaW5nPSJ7QmluZGluZyBEZXZpY2VOYW1lfSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICA8R3JpZFZpZXdDb2x1bW4gSGVhZGVyPSJTZWNyZXQiIFdpZHRoPSJBdXRvIiBEaXNwbGF5TWVtYmVyQmluZGluZz0ie0JpbmRpbmcgU2VjcmV0fSIgLz4NCiAgICAgICAgICAgICAgICAgICAgICAgIDwvR3JpZFZpZXc+DQogICAgICAgICAgICAgICAgICAgIDwvTGlzdFZpZXcuVmlldz4NCiAgICAgICAgICAgICAgICA8L0xpc3RWaWV3Pg0KICAgICAgICAgICAgICAgIDxTdGFja1BhbmVsIEdyaWQuUm93PSI0IiBHcmlkLkNvbHVtbj0iMiIgR3JpZC5Sb3dTcGFuPSIzIiBIb3Jpem9udGFsQWxpZ25tZW50PSJTdHJldGNoIiBWZXJ0aWNhbEFsaWdubWVudD0iU3RyZXRjaCIgPg0KICAgICAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0bkRlbGV0ZU90cCIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iRGVsZXRlIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iVG9wIiBIZWlnaHQ9IjI3IiAvPg0KICAgICAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0blNhdmVPdHAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IlNhdmUiIFdpZHRoPSIxMDAiIFZlcnRpY2FsQWxpZ25tZW50PSJUb3AiIEhlaWdodD0iMjciIC8+DQogICAgICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuRXhwb3J0UG9zaCIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iRXhwb3J0IFBvU0giIFdpZHRoPSIxMDAiIFZlcnRpY2FsQWxpZ25tZW50PSJUb3AiIEhlaWdodD0iMjciIFRvb2xUaXA9IkV4cG9ydCB0aGUgUG93ZXJTaGVsbCBjb21tYW5kIHRvIG1ha2UgdGhlIG5lY2Vzc2FyeSBjaGFuZ2VzLiIgLz4NCiAgICAgICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5Mb2FkT3RwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJMb2FkIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iVG9wIiBIZWlnaHQ9IjI3IiBUYWJJbmRleD0iNTAiIC8+DQogICAgICAgICAgICAgICAgPC9TdGFja1BhbmVsPg0KICAgICAgICAgICAgICAgIA0KICAgICAgICAgICAgPC9HcmlkPg0KICAgICAgICA8L0dyb3VwQm94Pg0KICAgICAgICA8R3JvdXBCb3ggR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIxIiBIZWFkZXI9IlFSIiBIZWlnaHQ9IkF1dG8iIE1hcmdpbj0iMiIgV2lkdGg9IkF1dG8iPg0KICAgICAgICAgICAgPEdyaWQgTWFyZ2luPSIzIj4NCiAgICAgICAgICAgICAgICA8R3JpZC5Sb3dEZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICA8L0dyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgPEdyaWQuQ29sdW1uRGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxDb2x1bW5EZWZpbml0aW9uIFdpZHRoPSJBdXRvIi8+DQogICAgICAgICAgICAgICAgPC9HcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgIDxJbWFnZSBOYW1lPSJJbWdRUiIgR3JpZC5Sb3c9IjAiIEdyaWQuQ29sdW1uPSIwIiBNYXJnaW49IjIiIEhlaWdodD0iMjAwIiBXaWR0aD0iMjAwIiBWaXNpYmlsaXR5PSJWaXNpYmxlIiBTdHJldGNoPSJVbmlmb3JtVG9GaWxsIiBSZW5kZXJUcmFuc2Zvcm1PcmlnaW49IjAuNSwwLjUiIC8+DQogICAgICAgICAgICAgICAgPExhYmVsIE5hbWU9ImxibFFSIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjAiIE1hcmdpbj0iMiIgQ29udGVudD0iIiBWZXJ0aWNhbEFsaWdubWVudD0iQm90dG9tIiBIb3Jpem9udGFsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgVmlzaWJpbGl0eT0iVmlzaWJsZSIgRm9udFdlaWdodD0iQm9sZCIgRm9udFNpemU9IjE2Ii8+DQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5FeHBvcnRRUiIgR3JpZC5Sb3c9IjIiIEdyaWQuQ29sdW1uPSIwIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBDb250ZW50PSJFeHBvcnQgUVIiIFdpZHRoPSIxMDAiIFZlcnRpY2FsQWxpZ25tZW50PSJCb3R0b20iIEhlaWdodD0iMjciIFRhYkluZGV4PSIxMDAiIC8+DQogICAgICAgICAgICA8L0dyaWQ+DQogICAgICAgIDwvR3JvdXBCb3g+DQogICAgICAgIDxHcm91cEJveCBHcmlkLlJvdz0iMiIgR3JpZC5Db2x1bW49IjAiIEhlYWRlcj0iVE9UUCIgSGVpZ2h0PSJhdXRvIiBNYXJnaW49IjIiIFdpZHRoPSJBdXRvIj4NCiAgICAgICAgICAgIDxHcmlkIE1hcmdpbj0iMyI+DQogICAgICAgICAgICAgICAgPEdyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxSb3dEZWZpbml0aW9uIEhlaWdodD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICAgICAgPFJvd0RlZmluaXRpb24gSGVpZ2h0PSJBdXRvIi8+DQogICAgICAgICAgICAgICAgPC9HcmlkLlJvd0RlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgIDxHcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgICAgICA8Q29sdW1uRGVmaW5pdGlvbiBXaWR0aD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Q29sdW1uRGVmaW5pdGlvbiBXaWR0aD0iQXV0byIvPg0KICAgICAgICAgICAgICAgICAgICA8Q29sdW1uRGVmaW5pdGlvbiBXaWR0aD0iQXV0byIvPg0KICAgICAgICAgICAgICAgIDwvR3JpZC5Db2x1bW5EZWZpbml0aW9ucz4NCiAgICAgICAgICAgICAgICA8TGFiZWwgTmFtZT0ibGJsU2VjcmV0IiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iOTAiIE1hcmdpbj0iMiIgQ29udGVudD0iU2VjcmV0IiAvPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiU2VjcmV0IiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9IiIgV2lkdGg9IjMyMCIgSXNSZWFkT25seT0iVHJ1ZSIgLz4NCiAgICAgICAgICAgICAgICA8QnV0dG9uIE5hbWU9ImJ0bkdlbmVyYXRlU2VjcmV0IiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjIiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IkdlbmVyYXRlIFNlY3JldCIgV2lkdGg9IjEwMCIgVGFiSW5kZXg9IjYwIiAvPg0KICAgICAgICAgICAgICAgIDxMYWJlbCBOYW1lPSJsYmxEZXZpY2VOYW1lIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iOTAiIE1hcmdpbj0iMiIgQ29udGVudD0iRGV2aWNlIE5hbWUiIC8+DQogICAgICAgICAgICAgICAgPFRleHRCb3ggTmFtZT0idGJEZXZpY2VOYW1lIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9IiIgV2lkdGg9IjMyMCIgVGFiSW5kZXg9IjcwIiAvPg0KICAgICAgICAgICAgICAgIDxCdXR0b24gTmFtZT0iYnRuQWRkUVIiIEdyaWQuUm93PSIxIiBHcmlkLkNvbHVtbj0iMiIgVmVydGljYWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIE1hcmdpbj0iMiIgQ29udGVudD0iQWRkIiBXaWR0aD0iMTAwIiAvPg0KICAgICAgICAgICAgICAgIDxMYWJlbCBOYW1lPSJsYmxHYXRld2F5IiBHcmlkLlJvdz0iMiIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBXaWR0aD0iOTAiIE1hcmdpbj0iMiIgQ29udGVudD0iR2F0ZXdheSBmcWRuIiAvPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiR2F0ZXdheSIgR3JpZC5Sb3c9IjIiIEdyaWQuQ29sdW1uPSIxIiBWZXJ0aWNhbENvbnRlbnRBbGlnbm1lbnQ9IkNlbnRlciIgTWFyZ2luPSIyIiBUZXh0PSIiIFdpZHRoPSIzMjAiIFRvb2xUaXA9IkNhbiBiZSBwcmUtY29uZmlndXJlZCBieSBzdGFydGluZyB0aGUgYXBwbGljYXRpb24gd2l0aCB0aGUgLUdhdGV3YXlVcmkgJyZsdDtndy5kb21haW4uY29tJmd0OycgcGFyYW1ldGVyIiBUYWJJbmRleD0iODAiIC8+DQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5HZW5lcmF0ZVFSIiBHcmlkLlJvdz0iMiIgR3JpZC5Db2x1bW49IjIiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IkdlbmVyYXRlIFFSIiBXaWR0aD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iVG9wIiBIZWlnaHQ9IjI3IiBUYWJJbmRleD0iOTAiIC8+DQogICAgICAgICAgICA8L0dyaWQ+DQogICAgICAgIDwvR3JvdXBCb3g+DQogICAgICAgIDxHcm91cEJveCBOYW1lPSJnYlRva2VuIiBHcmlkLlJvdz0iMSIgR3JpZC5Db2x1bW49IjEiIEhlYWRlcj0iVG9rZW4iIEhlaWdodD0iQXV0byIgTWFyZ2luPSIyIiBXaWR0aD0iQXV0byIgVmlzaWJpbGl0eT0iVmlzaWJsZSIgSXNFbmFibGVkPSJGYWxzZSI+DQogICAgICAgICAgICA8R3JpZCBNYXJnaW49IjMiPg0KICAgICAgICAgICAgICAgIDxHcmlkLlJvd0RlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgICAgICA8Um93RGVmaW5pdGlvbiBIZWlnaHQ9IkF1dG8iLz4NCiAgICAgICAgICAgICAgICA8L0dyaWQuUm93RGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgPEdyaWQuQ29sdW1uRGVmaW5pdGlvbnM+DQogICAgICAgICAgICAgICAgICAgIDxDb2x1bW5EZWZpbml0aW9uIC8+DQogICAgICAgICAgICAgICAgICAgIDxDb2x1bW5EZWZpbml0aW9uIFdpZHRoPSJBdXRvIi8+DQogICAgICAgICAgICAgICAgPC9HcmlkLkNvbHVtbkRlZmluaXRpb25zPg0KICAgICAgICAgICAgICAgIDxUZXh0Qm94IE5hbWU9InRiVE9UUFRva2VuIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjAiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIFRleHQ9Ii0tLS0tLSIgV2lkdGg9IkF1dG8iIElzUmVhZE9ubHk9IlRydWUiIEhvcml6b250YWxDb250ZW50QWxpZ25tZW50PSJDZW50ZXIiIEZvbnRTaXplPSIyMCIgRm9udEZhbWlseT0iTHVjaWRhIENvbnNvbGUiIC8+DQogICAgICAgICAgICAgICAgPEJ1dHRvbiBOYW1lPSJidG5WaWV3VE9UUFRva2VuIiBHcmlkLlJvdz0iMCIgR3JpZC5Db2x1bW49IjEiIFZlcnRpY2FsQ29udGVudEFsaWdubWVudD0iQ2VudGVyIiBNYXJnaW49IjIiIENvbnRlbnQ9IlZpZXcgVG9rZW4iIFdpZHRoPSIxMDAiIEhlaWdodD0iMjciIC8+DQoNCiAgICAgICAgICAgIDwvR3JpZD4NCiAgICAgICAgPC9Hcm91cEJveD4NCiAgICAgICAgPEltYWdlIE5hbWU9IkFwcEltYWdlIiAgR3JpZC5Db2x1bW49IjEiICBHcmlkLlJvdz0iMiIgSG9yaXpvbnRhbEFsaWdubWVudD0iUmlnaHQiIEhlaWdodD0iMTAwIiBWZXJ0aWNhbEFsaWdubWVudD0iQm90dG9tIiBXaWR0aD0iMTAwIi8+DQogICAgPC9HcmlkPg0KPC9XaW5kb3c+DQo=
 "@
 # [Convert]::ToBase64String(($QRImage.ToArray())) | clip.exe
 $AppImageB64 = @"
@@ -593,7 +613,7 @@ $XAML.SelectNodes("//*[@Name]") | ForEach-Object {
 Write-Verbose "Defining intractable elements"
 #All WPF GUI variables
 $Controls = Get-Variable WPFControl_*
-#Global varable, check if changes are saved
+#Global variable, check if changes are saved
 $Saved = $true
 
 #region Event handlers
@@ -613,26 +633,27 @@ $Form.add_Closing( {
                 [Win32.Functions]::ShowWindow($hWnd, $SW_SHOW)
             }
         } catch { "ERROR: $($_.Exception.Message)" } 
-    })
+    }
+)
 
 
 #System.EventHandler Initialized(System.Object, System.EventArgs)
 #System.EventHandler Activated(System.Object, System.EventArgs)
 
-$Form.add_Loaded(
-    {
+$Form.add_Loaded( {
         Write-Verbose "GUI Loaded"
-    })
+    }
+)
 
 $Form.add_Activated( {
         Write-Verbose "GUI Activated"
         Start-App
-    })
+    }
+)
 
 #System.Windows.DependencyPropertyChangedEventHandler IsVisibleChanged(System.Object, System.Windows.DependencyPropertyChangedEventArgs)
 
-$WPFControl_btnGenerateSecret.Add_Click( 
-    { # btnGenerateSecret Click Action
+$WPFControl_btnGenerateSecret.Add_Click( { # btnGenerateSecret Click Action
         Update-Gui
         Clean-GUIQRImage
         $Script:B32Secret = Generate-OTPSecret
@@ -762,14 +783,12 @@ $WPFControl_tbSecret.add_TextChanged(
 
 $WPFControl_btnSearch.Add_Click( 
     { # btnSearch Click Action
-        Write-Verbose "btnSearch Clicked"
         Update-Gui
         Execute-SearchADUser
     }
 )
 
-$WPFControl_lvUsernames.add_SelectionChanged( 
-    { 
+$WPFControl_lvUsernames.add_SelectionChanged( { 
         Write-Verbose "lvUsernames Selection Changed"
         Update-Gui
         Clean-GUIQR
@@ -790,22 +809,22 @@ $WPFControl_lvUsernames.add_SelectionChanged(
     }
 )
 
-$WPFControl_lvOtps.add_SelectionChanged( 
-    { 
+$WPFControl_lvOtps.add_SelectionChanged( { 
         Write-Verbose "lvOtps Selection Changed" 
         Update-Gui
         $SelectedItem = $WPFControl_lvOtps.SelectedItem
         Write-Verbose "Selected item: $SelectedItem"
+        $Script:B32Secret = $SelectedItem.Secret
         if ([String]::IsNullOrEmpty($($SelectedItem.Secret))) {
             if ($WPFControl_btnDeleteOtp.IsEnabled) { $WPFControl_btnDeleteOtp.IsEnabled = $false }
         } else {
             if (-Not $WPFControl_btnDeleteOtp.IsEnabled) { $WPFControl_btnDeleteOtp.IsEnabled = $true }
+            if (-Not $WPFControl_gbToken.IsEnabled) { $WPFControl_gbToken.IsEnabled = $true }
         }
     }
 )
 
-$WPFControl_btnGenerateQR.Add_Click( 
-    { # btnGenerateQR Click Action
+$WPFControl_btnGenerateQR.Add_Click( { # btnGenerateQR Click Action
         Update-Gui
         Clean-GUIQRImage
         if ($QRGeneration) {
@@ -813,8 +832,8 @@ $WPFControl_btnGenerateQR.Add_Click(
             Update-Gui
             $SelectedItem = $WPFControl_lvUsernames.SelectedItem
             $SamAccountName = $SelectedItem.SamAccountName
-            $DeviceName = $WPFControl_tbDeviceName.text
-            $Target = $WPFControl_tbGateway.text
+            $DeviceName = $WPFControl_tbDeviceName.Text
+            $Target = $WPFControl_tbGateway.Text
             $NetBIOSName = $SelectedItem.NetBIOSName
             
             $OTPUri = "otpauth://totp/"
@@ -843,8 +862,8 @@ $WPFControl_btnGenerateQR.Add_Click(
     }
 )
 
-$WPFControl_btnExportQR.Add_Click( 
-    { # btnExportQR Click Action
+$WPFControl_btnExportQR.Add_Click( {
+        # btnExportQR Click Action
         try {
             $SelectedItem = $WPFControl_lvUsernames.SelectedItem
             $PNGPath = Save-File -FileName $("{0}_{1}_{2}.png" -f $SelectedItem.SamAccountName, $WPFControl_tbDeviceName.text, $WPFControl_tbGateway.text)
@@ -858,6 +877,19 @@ $WPFControl_btnExportQR.Add_Click(
         } catch {
             Write-Verbose "$($_.Exception.Message)"
             $WPFControl_lblQR.Content = "Export Failed!"
+        }
+    }
+)
+
+$WPFControl_btnViewTOTPToken.Add_Click( {
+        # btnViewTOTPToken Click Action
+        Write-Verbose "btnViewTOTPToken Click"
+        try {
+            $Script:OTPToken = Get-OTPToken -B32Secret $Script:B32Secret
+            $WPFControl_tbTOTPToken.Text = $Script:OTPToken.OTP
+            Write-Verbose  $Script:OTPToken
+        } catch {
+            Write-Verbose "$($_.Exception.Message)"
         }
     }
 )
