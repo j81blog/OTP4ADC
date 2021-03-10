@@ -22,7 +22,7 @@
     Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v0.4.0
+    Version   : v0.4.1
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -70,7 +70,7 @@ Param(
     [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
     [String]$ExportPath
 )
-$AppVersion = "v0.4.0"
+$AppVersion = "v0.4.1"
 
 #region functions
 function New-QRTOTPImage {
@@ -351,17 +351,30 @@ function Search-User {
     Write-Verbose "Function: Search-User"
     try {
         if ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty) {
-            $ADUSers = Get-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))" -Properties @($Attribute)
+            if ($Script:AlternativeLDAPModule) {
+                $ADUSers = Get-AdsiADUser -Name $Name -Attributes @($Attribute)
+            } else {
+                $ADUSers = Get-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))" -Properties @($Attribute)
+            }
         } else {
-            $ADUSers = Get-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer -Credential $Script:LDAPCredential -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))" -Properties @($Attribute)
+            if ($Script:AlternativeLDAPModule) {
+                $ADUSers = Get-AdsiADUser -Name $Name -Attributes @($Attribute) -Credential $Script:LDAPCredential
+            } else {
+                $ADUSers = Get-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer -Credential $Script:LDAPCredential -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))" -Properties @($Attribute)
+            }
         }
         
         $Results = $ADUSers | ForEach-Object {
             $Username = $_.SamAccountName
+            if ($Script:AlternativeLDAPModule) {
+                $Surname = $_.sn
+            } else {
+                $Surname = $_.Surname
+            }
             [PSCustomObject]@{
                 SamAccountName    = $Username
                 GivenName         = $_.GivenName
-                Surname           = $_.Surname
+                Surname           = $Surname
                 Name              = $_.Name
                 Attribute         = $_."$Attribute"
                 DistinguishedName = $_.DistinguishedName
@@ -443,17 +456,33 @@ function Save-OtpToUser {
             Write-Verbose "New OTP AD User String: `"$NewOTPString`""
             #$DeviceName = $SyncHash.WPFControl_tbDeviceName.text
             if ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty) {
-                Set-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer-Identity $DistinguishedName  -Replace @{ "$Attribute" = $NewOTPString }
+                if ($Script:AlternativeLDAPModule) {
+                    Set-AdsiADUser -Path $DistinguishedName -Attribute $Attribute -NewValue $NewOTPString
+                } else {
+                    Set-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer-Identity $DistinguishedName  -Replace @{ "$Attribute" = $NewOTPString }
+                }
             } else {
-                Set-ADUser -Credential $Script:LDAPCredential -Server $Script:Settings.LDAPSettings.LDAPServer -Identity $DistinguishedName -Replace @{ "$Attribute" = $NewOTPString }
+                if ($Script:AlternativeLDAPModule) {
+                    Set-AdsiADUser -Path $DistinguishedName -Attribute $Attribute -NewValue $NewOTPString -Credential $Script:LDAPCredential
+                } else {
+                    Set-ADUser -Credential $Script:LDAPCredential -Server $Script:Settings.LDAPSettings.LDAPServer -Identity $DistinguishedName -Replace @{ "$Attribute" = $NewOTPString }
+                }
             }
         } else {
             Write-Verbose "No OTP for user, save empty string"
             $NewOTPString = $null
             if ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty) {
-                Set-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer-Identity $DistinguishedName -Clear @("$Attribute")
+                if ($Script:AlternativeLDAPModule) {
+                    Set-AdsiADUser -Path $DistinguishedName -Attribute $Attribute -NewValue $null 
+                } else {
+                    Set-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer-Identity $DistinguishedName -Clear @("$Attribute")
+                }
             } else {
-                Set-ADUser -Credential $Script:LDAPCredential -Server $Script:Settings.LDAPSettings.LDAPServer -Identity $DistinguishedName -Clear @("$Attribute")
+                if ($Script:AlternativeLDAPModule) {
+                    Set-AdsiADUser -Path $DistinguishedName -Attribute $Attribute -NewValue $null -Credential $Script:LDAPCredential
+                } else {
+                    Set-ADUser -Credential $Script:LDAPCredential -Server $Script:Settings.LDAPSettings.LDAPServer -Identity $DistinguishedName -Clear @("$Attribute")
+                }
             }
         }
     } catch {
@@ -573,26 +602,40 @@ function Invoke-LoadQRModule {
 
 function Invoke-LoadModules {
     try {
-        if (get-module -ListAvailable  ActiveDirectory -ErrorAction SilentlyContinue) {
+        if ($Script:AlternativeLDAPModule) {
+            Write-Verbose "Using Alternative AD Modules"
+            if ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbLDAPServer.Text))) {
+                if ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty) {
+                    $DNSRoot = Get-AdsiADDomain | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
+                    $SyncHash.WPFControl_tbLDAPServer.Text = $DNSRoot
+                } else {
+                    $DNSRoot = Get-AdsiADDomain -Credential $Script:LDAPCredential | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
+                    $SyncHash.WPFControl_tbLDAPServer.Text = $DNSRoot
+                }
+                Write-Verbose "Retrieved the default domain fqdn, $($SyncHash.WPFControl_tbLDAPServer.Text)"
+            }
+        } elseif (get-module -ListAvailable  ActiveDirectory -ErrorAction SilentlyContinue) {
             Write-Verbose "Loading ActiveDirectory Module"
             Import-Module -Name ActiveDirectory -Verbose:$False
             if ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbLDAPServer.Text))) {
                 if ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty) {
-                    $SyncHash.WPFControl_tbLDAPServer.Text = Get-ADDomain -Server $Script:Settings.LDAPSettings.LDAPServer -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
+                    $DNSRoot = Get-ADDomain -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
+                    $SyncHash.WPFControl_tbLDAPServer.Text = $DNSRoot
                 } else {
-                    $SyncHash.WPFControl_tbLDAPServer.Text = Get-ADDomain -Server $Script:Settings.LDAPSettings.LDAPServer -Credential $Script:LDAPCredential -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
+                    $DNSRoot = Get-ADDomain -Credential $Script:LDAPCredential -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
+                    $SyncHash.WPFControl_tbLDAPServer.Text = $DNSRoot
                 }
                 Write-Verbose "Retrieved the default domain fqdn, $($SyncHash.WPFControl_tbLDAPServer.Text)"
             }
         } else {
             $SyncHash.WPFControl_tbUsername.Text = "ActiveDirectory Module NOT Found!"
             if ($SyncHash.WPFControl_gbUser.IsEnabled) { $SyncHash.WPFControl_gbUser.IsEnabled = $false }
-            $null = [System.Windows.MessageBox]::Show("The PowerShell Module `"ActiveDirectory`" was NOT Found!", "ActiveDirectory Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+            $null = [System.Windows.MessageBox]::Show("The PowerShell Module `"ActiveDirectory`" was NOT Found!`r`nYou can try to set the (experimental) Alt Module option under settings.", "ActiveDirectory Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
         }
     } catch {
         $SyncHash.WPFControl_tbUsername.Text = "Error while loading ActiveDirectory Module!"
         if ($SyncHash.WPFControl_gbUser.IsEnabled) { $SyncHash.WPFControl_gbUser.IsEnabled = $false }
-        $null = [System.Windows.MessageBox]::Show("Error while loading the `"ActiveDirectory Module`"!", "ActiveDirectory Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+        $null = [System.Windows.MessageBox]::Show("Error while loading the `"ActiveDirectory Module`"!`r`nYou can try to set the (experimental) Alt Module option under settings.", "ActiveDirectory Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     }
     Invoke-LoadQRModule
 }
@@ -638,6 +681,16 @@ function Invoke-LoadSettings {
     $SyncHash.WPFControl_tbLDAPUsername.Text = $Script:Settings.LDAPSettings.LDAPUsername
     $SyncHash.WPFControl_pbLDAPPassword.Password = try { ConvertTo-PlainText -SecureString $( $Script:Settings.LDAPSettings.LDAPPassword ) } catch { $null }
     $SyncHash.WPFControl_tbLDAPAttribute.Text = $Script:Settings.LDAPSettings.LDAPAttribute
+    if (-Not [String]::IsNullOrEmpty($Script:Settings.LDAPSettings.LDAPAlternativeModules)) {
+        $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked = $Script:Settings.LDAPSettings.LDAPAlternativeModules
+        $Script:AlternativeLDAPModule = $Script:Settings.LDAPSettings.LDAPAlternativeModules
+    } else {
+        if (-Not ($Script:Settings.LDAPSettings | Get-Member -Name LDAPAlternativeModules -ErrorAction SilentlyContinue)) {
+            $Script:Settings.LDAPSettings | Add-Member -Type NoteProperty -Name LDAPAlternativeModules -Value $false
+        }
+        $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked = $false
+        $Script:AlternativeLDAPModule = $false
+    }
     if (-Not [String]::IsNullOrEmpty($Script:Settings.LDAPSettings.LDAPAttribute)) {
         $Script:Attribute = $Script:Settings.LDAPSettings.LDAPAttribute
     }
@@ -683,6 +736,7 @@ function Invoke-SaveSettings {
         $Script:Settings.LDAPSettings.LDAPUsername = $SyncHash.WPFControl_tbLDAPUsername.Text
         $Script:Settings.LDAPSettings.LDAPPassword = try { ConvertTo-SecureString -String $($SyncHash.WPFControl_pbLDAPPassword.Password) -AsPlainText -Force -ErrorAction Stop } catch { $null }
         $Script:Settings.LDAPSettings.LDAPAttribute = $SyncHash.WPFControl_tbLDAPAttribute.Text
+        $Script:Settings.LDAPSettings.LDAPAlternativeModules = $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked
         Export-Clixml -Path $Path -InputObject $Script:Settings -Force
         Update-Gui
         Write-Verbose "Settings saved"
@@ -690,6 +744,153 @@ function Invoke-SaveSettings {
         Write-Verbose "Saving failed, $($_.Exception.Message)"
     }
 }
+
+#region Alternative AD Functions
+
+function Get-AdsiADDomain {
+    [CmdletBinding()]
+    Param(
+        [System.Management.Automation.PSCredential]
+        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty
+    )
+    Write-Verbose "Starting function: Get-AdsiADDomain"
+    if ($Credential -eq [PSCredential]::Empty) {
+        $root = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList "LDAP://RootDSE"
+    } else {
+        $root = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList "LDAP://RootDSE", $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+    }
+    $forestConfig = $Root.Get("configurationNamingContext")
+    if ($Credential -eq [PSCredential]::Empty) {
+        $searchRoot = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList "LDAP://CN=Partitions,$forestConfig"
+    } else {
+        $searchRoot = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList "LDAP://CN=Partitions,$forestConfig", $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+    }
+        
+    $adSearcher = [adsisearcher]"(&(objectcategory=crossref)(netbiosname=*))"
+    $adSearcher.SearchRoot = $searchRoot
+    $domains = $adSearcher.FindAll()
+    Write-Output ([PSCustomObject]@{
+            DNSRoot           = ($domains | Select-Object -ExpandProperty Properties)['dnsroot'][0]
+            DistinguishedName = $root | Select-Object -ExpandProperty rootDomainNamingContext
+            DirectoryServer   = $root | Select-Object -ExpandProperty dnsHostName
+        })
+    Write-Verbose "Ending function: Get-AdsiADDomain"
+}
+        
+function Test-AdsiADCredential {
+    [CmdletBinding()]
+    Param(
+        [System.Management.Automation.PSCredential]
+        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty
+    )
+    Write-Verbose "Starting function: Test-AdsiADCredential"
+    $DomainDN = $(([adsisearcher]"").Searchroot.path)
+    try {
+        $Domain = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $DomainDN, $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+        $result = [bool]$Domain.distinguishedName
+        Write-Output $result
+    } catch {
+        Write-Verbose $($_.Exception.Message)
+        Write-Output $false
+    }
+    Write-Verbose "Ending function: Test-AdsiADCredential"
+}
+    
+    
+function Get-AdsiADUser {
+    [CmdletBinding()]
+    Param(
+        [String]$Name,
+        
+        [String[]]$Attributes,
+        
+        [Int]$SearchLimit = 200,
+        
+        [String]$SearchBase,
+        
+        [System.Management.Automation.PSCredential]
+        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty
+        
+    )
+    Write-Verbose "Starting function: Get-AdsiADUser"
+    function ConvertFrom-HashTable {
+        [CmdletBinding()]
+        param(
+            [HashTable]$Collection
+        )
+        $Object = New-Object PSObject
+        foreach ($key in $Collection.keys) {
+            $Object | Add-Member -MemberType NoteProperty -Name $key -Value ($Collection.$Key | ForEach-Object { $_ })
+        }
+        return $Object
+    }
+    #Source https://lazywinadmin.com/2013/10/powershell-using-adsi-with-alternate.html
+    $Searcher = New-Object -TypeName System.DirectoryServices.DirectorySearcher
+    $Searcher.Filter = "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))"
+    $Searcher.SizeLimit = "$SearchLimit"
+        
+    if ([String]::IsNullOrEmpty($SearchBase)) {
+        $DomainDN = $(([adsisearcher]"").Searchroot.path)
+    } else {
+        if ($SearchBase -notlike "LDAP://*") {
+            $DomainDN = "LDAP://$SearchBase"
+        } else {
+            $DomainDN = $SearchBase
+        }
+    }
+    if ($Credential -eq [PSCredential]::Empty) {
+        $Domain = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $DomainDN
+    } else {
+        $Domain = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $DomainDN, $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+    }
+    $Searcher.SearchRoot = $Domain
+    $Attributes += @("Name", "UserPrincipalName", "SamAccountName", "Sn", "GivenName", "distinguishedName")
+    $Attributes = $Attributes | Select-Object -Unique
+    foreach ($item in $Attributes) { $searcher.PropertiesToLoad.Add($item) | out-null } 
+                
+    $Users = $Searcher.FindAll()
+    foreach ($User in $Users) {
+        Write-Output $(ConvertFrom-HashTable -Collection $User.Properties)
+    }
+    Write-Verbose "Ending function: Get-AdsiADUser"
+}
+    
+function Set-AdsiADUser {
+    [CmdletBinding()]
+    Param(
+        [String]$Path,
+        
+        [String]$Attribute,
+        
+        [String]$NewValue,
+        
+        [System.Management.Automation.PSCredential]
+        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty
+        
+    )
+    Write-Verbose "Starting function: Set-AdsiADUser"
+    if ($Path -like "CN=*") {
+        $Path = "LDAP://$Path"
+    }
+        
+    if ($Credential -eq [PSCredential]::Empty) {
+        $User = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $Path
+    } else {
+        $User = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $Path, $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+    }
+    #$User = [ADSI]"$Path"
+        
+    if ([String]::IsNullOrEmpty($NewValue)) {
+        $User.PutEx(1, $Attribute, $null)
+    } else {
+        $User.$Attribute = $NewValue
+    }
+    $User.SetInfo()
+    Write-Verbose "Ending function: Set-AdsiADUser"
+}
+
+#endregion Alternative AD Functions
+
 
 #endregion functions
 
@@ -845,10 +1046,11 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
         TokenText    = $TokenText
         QRSize       = $QRSize
         LDAPSettings = [PSCustomObject]@{
-            LDAPServer    = $null
-            LDAPUsername  = $null
-            LDAPPassword  = $null
-            LDAPAttribute = $Attribute
+            LDAPServer             = $null
+            LDAPUsername           = $null
+            LDAPPassword           = $null
+            LDAPAttribute          = $Attribute
+            LDAPAlternativeModules = $false
         }
     }
     $AppSettingsFile = Join-Path -Path $env:APPDATA -ChildPath "OTP4ADC\Settings.xml"
@@ -861,9 +1063,9 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
     $SyncHash.TokenText = 2
     $SyncHash.Host = $host
     Write-Verbose "HashTable created"
-    $RunSpace = [runspacefactory]::CreateRunspace()
+    $RunSpace = [RunSpaceFactory]::CreateRunspace()
     $RunSpace.Open()
-    Write-Verbose "Runspace : $($RunSpace.RunspaceStateInfo.State)"
+    Write-Verbose "RunSpace : $($RunSpace.RunSpaceStateInfo.State)"
     $RunSpace.SessionStateProxy.SetVariable('SyncHash', $SyncHash)
     $PoSH = [powershell]::Create()
     $PoSH.Runspace = $RunSpace
@@ -872,7 +1074,6 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
                 if ($null -ne $SyncHash.OTPToken -and ($SyncHash.OTPToken.ValidTo -is [datetime])) {
                     $SecondsLeft = ($SyncHash.OTPToken.ValidTo - (Get-Date)).TotalSeconds
                     if ($SecondsLeft -lt 0) {
-                        $SyncHash.host.ui.WriteVerboseLine("RS: Token is no longer valid")
                         $syncHash.Form.Dispatcher.Invoke(
                             [action] {
                                 $SyncHash.WPFControl_tbTOTPToken.Text = "------"
@@ -1087,8 +1288,10 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
                         <TextBox Name="tbLDAPUsername" Grid.Row="2" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP username with the required permissions" TabIndex="120" />
                         <Label Name="lblLDAPPassword" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Password" />
                         <PasswordBox Name="pbLDAPPassword" Grid.Row="3" Grid.Column="1" VerticalContentAlignment="Center" Password="" Margin="2" Width="320" ToolTip="Enter the LDAP password for the username" TabIndex="130" />
-                        <Label Name="lblLDAPAttribute" Grid.Row="5" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Attribute" />
-                        <TextBox Name="tbLDAPAttribute" Grid.Row="5" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP attribute name for storing the OTP seed" TabIndex="200" />
+                        <Label Name="lblLDAPAttribute" Grid.Row="4" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Attribute" />
+                        <TextBox Name="tbLDAPAttribute" Grid.Row="4" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP attribute name for storing the OTP seed" TabIndex="140" />
+                        <Label Name="lblLDAPAlternativeModule" Grid.Row="5" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Alt. Module" />
+                        <CheckBox Name="cbLDAPAlternativeModule" Grid.Row="5" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Content="Experimental option!" ToolTip="When checked the PowerShell module 'ActiveDirectory' will not be used, but an alternative." TabIndex="150"/>
                     </Grid>
                 </GroupBox>
             </Grid>
@@ -1110,7 +1313,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         $SyncHash.App = [Windows.Application]::new()
         $SyncHash.Form = [Windows.Markup.XamlReader]::Load( (New-Object System.Xml.XmlNodeReader $XAML) )
     } catch {
-        Write-Warning "Unable to parse XML, with error: $($Error[0])`n Ensure that there are NO SelectionChanged or TextChanged properties in your textboxes (PowerShell cannot process them)"
+        Write-Warning "Unable to parse XML, with error: $($Error[0])`n Ensure that there are NO SelectionChanged or TextChanged properties in your TextBoxes (PowerShell cannot process them)"
         throw
     }
 
@@ -1132,7 +1335,6 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
 
     #Loading settings from file
     Invoke-LoadSettings -Path $AppSettingsFile
-
 
     #region Event handlers
 
@@ -1440,6 +1642,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             try {
                 Invoke-SaveSettings -Path $AppSettingsFile
                 Invoke-LoadSettings -Path $AppSettingsFile
+                Invoke-LoadModules
             } catch {
                 Write-Verbose "$($_.Exception.Message)"
             }
