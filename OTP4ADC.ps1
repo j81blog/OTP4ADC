@@ -22,7 +22,7 @@
     Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v0.4.1
+    Version   : v0.4.2
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -53,7 +53,7 @@ Param(
     [Parameter(ParameterSetName = "CommandLine")]
     [ValidateNotNullOrEmpty()]
     [ValidateSet("1", "2", "3")]
-    [String]$TokenText = 2,
+    [String]$TokenText = "2",
 
     [Parameter(ParameterSetName = "GUI")]
     [Switch]$Console,
@@ -70,7 +70,7 @@ Param(
     [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
     [String]$ExportPath
 )
-$AppVersion = "v0.4.1"
+$AppVersion = "v0.4.2"
 
 #region functions
 function New-QRTOTPImage {
@@ -156,24 +156,30 @@ $($URI.AbsoluteUri)
     if ($OutStream) { return $MemoryStream }
     
 }
+
 <#
 function Get-OTPSecret {
     [cmdletbinding()]
     param(
-        [Int]$Length = 26
+        [Int]$Length = 40
     )
-    Write-Verbose "Function: Get-OTPSecret"
-    #https://support.yubico.com/support/solutions/articles/15000034367-generating-base32-string-examples
-    $RNGCrypto = [Security.Cryptography.RNGCryptoServiceProvider]::Create()
-    [Byte[]]$x = 1
-    for ($secret = ''; $secret.length -lt $Length) {
-        $RNGCrypto.GetBytes($x)
-        if ([char]$x[0] -clike '[2-7A-Z]') {
-            $secret += [char]$x[0]
+    $base32Secret = $null
+    while ($null -eq $base32Secret) {
+        try{
+            $hexSecret = ((($Length) | ForEach-Object { ((1..$_) | ForEach-Object { ('{0:X}' -f (Get-random(16))) }) }) -Join "").ToLower()
+            $byteSecret = $hexSecret -replace '^0x', '' -split "(?<=\G\w{2})(?=\w{2})" | ForEach-Object { [Convert]::ToByte( $_, 16 ) }
+            $byteArrayAsBinaryString = -join $byteSecret.ForEach{ [Convert]::ToString($_, 2).PadLeft(8, '0') }
+            $base32Secret = [regex]::Replace($byteArrayAsBinaryString, '.{5}', {
+                    param($Match)
+                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'[[Convert]::ToInt32($Match.Value, 2)]
+                })
+        } catch {
+            $base32Secret = $null
         }
     }
-    return $secret
-}
+    return $base32Secret
+}  
+
 #>
 
 function Get-OTPSecret {
@@ -233,6 +239,7 @@ function Get-OTPToken {
     )
     Write-Verbose "Function: Get-OTPToken"
     #Unix epoch time in UTC
+    #Source https://gist.github.com/jonfriesen/234c7471c3e3199f97d5
     $EpochTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $KeyedHashAlgorithm = New-Object -TypeName "System.Security.Cryptography.HMACSHA1"
     try {
@@ -299,9 +306,9 @@ function ConvertFrom-Attribute {
 function Initialize-GUI {
     Write-Verbose "Function: Initialize-GUI"
     $SyncHash.Form.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterScreen
-    $SyncHash.WPFControl_tbAttribute.Text = $Attribute
+    $SyncHash.WPFControl_tbAttribute.Text = $SyncedVariables.Attribute
     $Script:OTPDevices = @()
-    $SyncHash.DeviceSecrets = @()
+    $SyncedVariables.DeviceSecrets = @()
     Reset-GUIForm
 }
 
@@ -317,6 +324,7 @@ function Invoke-CleanGUIQRImage {
     if ($SyncHash.WPFControl_btnGenerateQR.IsEnabled) { $SyncHash.WPFControl_btnGenerateQR.IsEnabled = $false }
     if ($SyncHash.WPFControl_btnExportQR.IsEnabled) { $SyncHash.WPFControl_btnExportQR.IsEnabled = $false }
     $SyncHash.WPFControl_ImgQR.Source = $null
+    $SyncHash.WPFControl_lbTokenUserText.Content = ""
     #$SyncHash.WPFControl_ImgQR.Visibility = [System.Windows.Visibility]::Hidden
     if ($QRGeneration) { $SyncHash.WPFControl_lblQR.Content = "" }
     $Script:QRImage = $null
@@ -344,27 +352,31 @@ function Search-User {
     param(
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
-        [String]$Name,
-        
-        [String]$Attribute = $SyncHash.Attribute
+        [String]$Name
     )
     Write-Verbose "Function: Search-User"
     try {
-        if ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty) {
-            if ($Script:AlternativeLDAPModule) {
-                $ADUSers = Get-AdsiADUser -Name $Name -Attributes @($Attribute)
-            } else {
-                $ADUSers = Get-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))" -Properties @($Attribute)
+        if ($Script:AlternativeLDAPModule) {
+            $Params = @{
+                Attributes = @($SyncedVariables.Attribute)
+                Name       = $Name
             }
-        } else {
-            if ($Script:AlternativeLDAPModule) {
-                $ADUSers = Get-AdsiADUser -Name $Name -Attributes @($Attribute) -Credential $Script:LDAPCredential
-            } else {
-                $ADUSers = Get-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer -Credential $Script:LDAPCredential -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))" -Properties @($Attribute)
+            $ADUsers = Get-AdsiADUser @Params
+        } else { 
+            $Params = @{
+                Properties = @($SyncedVariables.Attribute)
+                LDAPFilter = "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))"
             }
+            if (-Not ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty)) {
+                $Params.Credential = $Script:LDAPCredential
+            }
+            if (-Not [String]::IsNullOrEmpty($($SyncedVariables.Settings.LDAPSettings.LDAPServer))) {
+                $Params.Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer
+            }
+            $ADUsers = Get-ADUser @Params
         }
-        
-        $Results = $ADUSers | ForEach-Object {
+       
+        $Results = $ADUsers | ForEach-Object {
             $Username = $_.SamAccountName
             if ($Script:AlternativeLDAPModule) {
                 $Surname = $_.sn
@@ -376,11 +388,12 @@ function Search-User {
                 GivenName         = $_.GivenName
                 Surname           = $Surname
                 Name              = $_.Name
-                Attribute         = $_."$Attribute"
+                Attribute         = $_."$($SyncedVariables.Attribute)"
                 DistinguishedName = $_.DistinguishedName
                 UserPrincipalName = $_.UserPrincipalName
             } }
     } catch {
+        Write-Verbose "Caught an error, $($_.Exception.Message)"
         $null = [System.Windows.MessageBox]::Show("$($_.Exception.Message)", "Error!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     }
     return $Results 
@@ -388,39 +401,45 @@ function Search-User {
 
 function Invoke-CleanGUIUser {
     Write-Verbose "Function: Invoke-CleanGUIUser"
-    if ($SyncHash.Saved) {
-        $Continue = $true
-    } else {
-        $result = [System.Windows.MessageBox]::Show("There are unsaved changes!`nDo you want to continue and loose the made changes?", "Unsaved changes", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Exclamation)
-        switch ($result.ToString()) {
-            "Yes" { $Continue = $true }
-            "No" { $Continue = $false }
-            Default { $Continue = $false }
-        }
+    if (-Not $SyncedVariables.CleanGUIUser) {
+        if ($SyncedVariables.Saved) {
+            $Continue = $true
+        } else {
+            $result = [System.Windows.MessageBox]::Show("There are unsaved changes!`nDo you want to continue and loose the made changes?", "Unsaved changes", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Exclamation)
+            switch ($result.ToString()) {
+                "Yes" { $Continue = $true }
+                "No" { $Continue = $false }
+                Default { $Continue = $false }
+            }
         
-    }
-    if ($Continue) {
-        $SyncHash.WPFControl_lvUsernames.ItemsSource = $null
-        $SyncHash.WPFControl_tbUsername.Text = ""
-        $SyncHash.WPFControl_lvOtps.ItemsSource = $null
-        if ($SyncHash.WPFControl_btnDeleteOtp.IsEnabled) { $SyncHash.WPFControl_btnDeleteOtp.IsEnabled = $false }
-        if ($SyncHash.WPFControl_btnSaveOtp.IsEnabled) { $SyncHash.WPFControl_btnSaveOtp.IsEnabled = $false }
-        if ($SyncHash.WPFControl_btnExportPosh.IsEnabled) { $SyncHash.WPFControl_btnExportPosh.IsEnabled = $false }
-        $SyncHash.Saved = $true
-        $SyncHash.DeviceSecrets = @()
-        $Script:OTPDevices = @()
-        Invoke-CleanGUIQR
-        Invoke-CleanOTPToken
-        Invoke-UpdateTokenText
+        }
+        if ($Continue) {
+            $SyncHash.WPFControl_lvUsernames.ItemsSource = $null
+            $SyncHash.WPFControl_tbUsername.Text = ""
+            $SyncHash.WPFControl_lvOtps.ItemsSource = $null
+            if ($SyncHash.WPFControl_btnDeleteOtp.IsEnabled) { $SyncHash.WPFControl_btnDeleteOtp.IsEnabled = $false }
+            if ($SyncHash.WPFControl_btnSaveOtp.IsEnabled) { $SyncHash.WPFControl_btnSaveOtp.IsEnabled = $false }
+            if ($SyncHash.WPFControl_btnExportPosh.IsEnabled) { $SyncHash.WPFControl_btnExportPosh.IsEnabled = $false }
+            $SyncedVariables.Saved = $true
+            $SyncedVariables.DeviceSecrets = @()
+            $Script:OTPDevices = @()
+            Invoke-CleanGUIQR
+            Invoke-CleanOTPToken
+            Invoke-UpdateTokenText
+        }
+        $SyncedVariables.CleanGUIUser = $true
+    } else {
+        Write-Verbose "Invoke-CleanGUIUser, nothing to do."
     }
 }
 
 function Invoke-CleanOTPToken {
     Write-Verbose "Function: Invoke-CleanOTPToken"
-    $SyncHash.OTPUpdate = $False
-    $SyncHash.OTPToken = $null
-    try { $PoSH.EndInvoke($handle) } catch { }
+    $SyncedVariables.OTPUpdate = $False
+    $SyncedVariables.OTPToken = $null
+    try { $PoSH.EndInvoke($SyncedVariables.handle) } catch { }
     if ($SyncHash.WPFControl_gbToken.IsEnabled) { $SyncHash.WPFControl_gbToken.IsEnabled = $false }
+    if ($SyncHash.WPFControl_btnViewTOTPToken.IsEnabled) { $SyncHash.WPFControl_btnViewTOTPToken.IsEnabled = $false }
     $SyncHash.WPFControl_tbTOTPToken.Text = "------"
     $SyncHash.WPFControl_pbTOTPToken.Value = 0
 }
@@ -447,75 +466,89 @@ function Save-OtpToUser {
     $SelectedUser = $SyncHash.WPFControl_lvUsernames.SelectedItem
     $DistinguishedName = $SelectedUser.DistinguishedName
     try {
-        if ($SyncHash.DeviceSecrets.Count -gt 0) {
+        if ($SyncedVariables.DeviceSecrets.Count -gt 0) {
             $NewOTP = @()
-            ForEach ($Item in $SyncHash.DeviceSecrets) {
+            ForEach ($Item in $SyncedVariables.DeviceSecrets) {
                 $NewOTP += "{0}={1}" -f $Item.DeviceName, $Item.Secret
             }
             $NewOTPString = "#@$($NewOTP -Join '&,')&,"
             Write-Verbose "New OTP AD User String: `"$NewOTPString`""
             #$DeviceName = $SyncHash.WPFControl_tbDeviceName.text
-            if ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty) {
-                if ($Script:AlternativeLDAPModule) {
-                    Set-AdsiADUser -Path $DistinguishedName -Attribute $Attribute -NewValue $NewOTPString
-                } else {
-                    Set-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer-Identity $DistinguishedName  -Replace @{ "$Attribute" = $NewOTPString }
+            if ($Script:AlternativeLDAPModule) {
+                $Params = @{
+                    DistinguishedName = $DistinguishedName
+                    Attribute         = $SyncedVariables.Attribute
+                    NewValue          = $NewOTPString
                 }
+                Set-AdsiADUser @Params
             } else {
-                if ($Script:AlternativeLDAPModule) {
-                    Set-AdsiADUser -Path $DistinguishedName -Attribute $Attribute -NewValue $NewOTPString -Credential $Script:LDAPCredential
-                } else {
-                    Set-ADUser -Credential $Script:LDAPCredential -Server $Script:Settings.LDAPSettings.LDAPServer -Identity $DistinguishedName -Replace @{ "$Attribute" = $NewOTPString }
+                $Params = @{
+                    Replace  = @{ "$($SyncedVariables.Attribute)" = $NewOTPString }
+                    Identity = $DistinguishedName
                 }
+                if (-Not ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty)) {
+                    $Params.Credential = $Script:LDAPCredential
+                }
+                if (-Not [String]::IsNullOrEmpty($($SyncedVariables.Settings.LDAPSettings.LDAPServer))) {
+                    $Params.Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer
+                }
+                Set-ADUser @Params
             }
         } else {
             Write-Verbose "No OTP for user, save empty string"
             $NewOTPString = $null
-            if ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty) {
-                if ($Script:AlternativeLDAPModule) {
-                    Set-AdsiADUser -Path $DistinguishedName -Attribute $Attribute -NewValue $null 
-                } else {
-                    Set-ADUser -Server $Script:Settings.LDAPSettings.LDAPServer-Identity $DistinguishedName -Clear @("$Attribute")
+            if ($Script:AlternativeLDAPModule) {
+                $Params = @{
+                    DistinguishedName = $DistinguishedName
+                    Attribute         = $SyncedVariables.Attribute
+                    NewValue          = $null
                 }
+                Set-AdsiADUser @Params
             } else {
-                if ($Script:AlternativeLDAPModule) {
-                    Set-AdsiADUser -Path $DistinguishedName -Attribute $Attribute -NewValue $null -Credential $Script:LDAPCredential
-                } else {
-                    Set-ADUser -Credential $Script:LDAPCredential -Server $Script:Settings.LDAPSettings.LDAPServer -Identity $DistinguishedName -Clear @("$Attribute")
+                $Params = @{
+                    Clear = @("$($SyncedVariables.Attribute)")
+                    Identity = $DistinguishedName
                 }
+                if (-Not ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty)) {
+                    $Params.Credential = $Script:LDAPCredential
+                }
+                if (-Not [String]::IsNullOrEmpty($($SyncedVariables.Settings.LDAPSettings.LDAPServer))) {
+                    $Params.Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer
+                }
+                Set-ADUser @Params
             }
         }
     } catch {
         $null = [System.Windows.MessageBox]::Show("$($_.Exception.Message)", "Error!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     }
-    $SyncHash.Saved = $true
+    $SyncedVariables.Saved = $true
 }
 
 function Save-OtpToUserExportCommand {
     Write-Verbose "Function: Save-OtpToUserExportCommand"
     $SelectedUser = $SyncHash.WPFControl_lvUsernames.SelectedItem
     $DistinguishedName = $SelectedUser.DistinguishedName
-    if ($SyncHash.DeviceSecrets.Count -gt 0) {
+    if ($SyncedVariables.DeviceSecrets.Count -gt 0) {
         $NewOTP = @()
-        ForEach ($Item in $SyncHash.DeviceSecrets) {
+        ForEach ($Item in $SyncedVariables.DeviceSecrets) {
             $NewOTP += "{0}={1}" -f $Item.DeviceName, $Item.Secret
         }
         $NewOTPString = "#@$($NewOTP -Join '&,')&,"
         Write-Verbose "New OTP AD User String: `"$NewOTPString`""
         #$DeviceName = $SyncHash.WPFControl_tbDeviceName.text
-        $ExportPoSHCommand = 'Set-ADUser -Identity "{0}" -Replace @{{ "{1}" = "{2}" }}' -f $DistinguishedName, $Attribute, $NewOTPString
+        $ExportPoSHCommand = 'Set-ADUser -Identity "{0}" -Replace @{{ "{1}" = "{2}" }}' -f $DistinguishedName, $SyncedVariables.Attribute, $NewOTPString
     } else {
         Write-Verbose "No OTP for user, save empty string"
         $NewOTPString = $null
-        $ExportPoSHCommand = 'Set-ADUser -Identity "{0}" -Clear @("{1}")' -f $DistinguishedName, $Attribute
+        $ExportPoSHCommand = 'Set-ADUser -Identity "{0}" -Clear @("{1}")' -f $DistinguishedName, $SyncedVariables.Attribute
     }
     $ExportPoSHCommand | clip.exe
     $result = [System.Windows.MessageBox]::Show("The PowerShell command to make the necessary changes was copied to the clipboard.`nClean the current screen? Changes are not saved to the selected user unless you run the copied command!", "PowerShell Command", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
     Write-Verbose "Result: $result"
     switch ($result) {
-        "Yes" { $SyncHash.Saved = $true }
-        "No" { $SyncHash.Saved = $false }
-        Default { $SyncHash.Saved = $true }
+        "Yes" { $SyncedVariables.Saved = $true }
+        "No" { $SyncedVariables.Saved = $false }
+        Default { $SyncedVariables.Saved = $true }
     }
 }
 
@@ -534,10 +567,38 @@ function Invoke-UpdateTokenText {
     if ([String]::IsNullOrEmpty($UserPrincipalName)) {
         $UserPrincipalName = 'username@domain.corp'
     }
-    $SyncHash.WPFControl_rbTokenTextOption1.Content = '[1] {0}' -f $UserPrincipalName
-    $SyncHash.WPFControl_rbTokenTextOption2.Content = '[2] {0}@{1}' -f $SamAccountName, $GatewayURI
-    $SyncHash.WPFControl_rbTokenTextOption3.Content = '[3] {0}@{1}' -f $UserPrincipalName, $GatewayURI
+    $NewTokenTextOption1 = $('{0}' -f $UserPrincipalName)
+    $NewTokenTextOption2 = $('{0}@{1}' -f $SamAccountName, $GatewayURI)
+    $NewTokenTextOption3 = $('{0}@{1}' -f $UserPrincipalName, $GatewayURI)
+    $NewTokenTextOption0 = $('{0}' -f $UserPrincipalName)
 
+    $SyncHash.WPFControl_rbTokenTextOption1.Content = '[1] {0}' -f $NewTokenTextOption1
+    $SyncHash.WPFControl_rbTokenTextOption2.Content = '[2] {0}' -f $NewTokenTextOption2
+    $SyncHash.WPFControl_rbTokenTextOption3.Content = '[3] {0}' -f $NewTokenTextOption3
+    # "TokenText: $($SyncedVariables.TokenText)"
+    switch ($SyncedVariables.TokenText) {
+        "1" {
+            # "(1) username@domain.com"
+            $SyncedVariables.SelectedTokenText = $NewTokenTextOption1
+            Break
+        }
+        "2" {
+            # "(2) username@gateway.domain.com"
+            $SyncedVariables.SelectedTokenText = $NewTokenTextOption2
+            Break
+        }
+        "3" {
+            # "(3) username@domain.com@gateway.domain.com"
+            $SyncedVariables.SelectedTokenText = $NewTokenTextOption3
+            Break
+        }
+        Default {
+            Write-Verbose "(UNKNOWN) Could not match the TokenText ID! Using the default value."
+            $SyncedVariables.SelectedTokenText = $NewTokenTextOption0
+            Break
+        }
+    }
+   
 }
 function Invoke-ValidateGUIQR {
     Write-Verbose "Function: Invoke-ValidateGUIQR"
@@ -568,6 +629,7 @@ function Invoke-SearchADUser {
         if ($SyncHash.WPFControl_lvUsernames.Items.Count -eq 1) {
             $SyncHash.WPFControl_lvUsernames.SelectedIndex = 0
         }
+        $SyncedVariables.CleanGUIUser = $false
     }
 }
 
@@ -669,40 +731,46 @@ function Invoke-LoadSettings {
     Write-Verbose "Function: Invoke-LoadSettings"
     if (Test-Path -Path $Path) {
         try {
-            Write-Verbose "Trying to load the settings"
-            $Script:Settings = Import-Clixml -Path $Path
+            $SyncedVariables.Settings = Import-Clixml -Path $Path
+            Write-Verbose "Settings loaded!"
         } catch {
             Write-Verbose "Loading failed, $($_.Exception.Message)"
         }
     }
-    $SyncHash.WPFControl_tbGatewayURI.Text = $Script:Settings.GatewayURI
-    $SyncHash.WPFControl_tbQRSize.Text = $Script:Settings.QRSize
-    $SyncHash.WPFControl_tbLDAPServer.Text = $Script:Settings.LDAPSettings.LDAPServer
-    $SyncHash.WPFControl_tbLDAPUsername.Text = $Script:Settings.LDAPSettings.LDAPUsername
-    $SyncHash.WPFControl_pbLDAPPassword.Password = try { ConvertTo-PlainText -SecureString $( $Script:Settings.LDAPSettings.LDAPPassword ) } catch { $null }
-    $SyncHash.WPFControl_tbLDAPAttribute.Text = $Script:Settings.LDAPSettings.LDAPAttribute
-    if (-Not [String]::IsNullOrEmpty($Script:Settings.LDAPSettings.LDAPAlternativeModules)) {
-        $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked = $Script:Settings.LDAPSettings.LDAPAlternativeModules
-        $Script:AlternativeLDAPModule = $Script:Settings.LDAPSettings.LDAPAlternativeModules
+    $SyncHash.WPFControl_tbGatewayURI.Text = $SyncedVariables.Settings.GatewayURI
+    $SyncHash.WPFControl_tbQRSize.Text = $SyncedVariables.Settings.QRSize
+    $SyncHash.WPFControl_tbLDAPServer.Text = $SyncedVariables.Settings.LDAPSettings.LDAPServer
+    $SyncHash.WPFControl_tbLDAPPort.Text = $SyncedVariables.Settings.LDAPSettings.LDAPPort
+    if ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbLDAPPort.Text))) { 
+        $SyncHash.WPFControl_tbLDAPPort.Text = "0"
+    }
+    $SyncHash.WPFControl_tbLDAPUsername.Text = $SyncedVariables.Settings.LDAPSettings.LDAPUsername
+    $SyncHash.WPFControl_pbLDAPPassword.Password = try { ConvertTo-PlainText -SecureString $( $SyncedVariables.Settings.LDAPSettings.LDAPPassword ) } catch { $null }
+    $SyncHash.WPFControl_tbLDAPAttribute.Text = $SyncedVariables.Settings.LDAPSettings.LDAPAttribute
+    $SyncHash.WPFControl_tbAttribute.Text = $SyncedVariables.Settings.LDAPSettings.LDAPAttribute
+    $SyncedVariables.Attribute = $SyncedVariables.Settings.LDAPSettings.LDAPAttribute
+    if (-Not [String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.LDAPAlternativeModules)) {
+        $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked = $SyncedVariables.Settings.LDAPSettings.LDAPAlternativeModules
+        $Script:AlternativeLDAPModule = $SyncedVariables.Settings.LDAPSettings.LDAPAlternativeModules
     } else {
-        if (-Not ($Script:Settings.LDAPSettings | Get-Member -Name LDAPAlternativeModules -ErrorAction SilentlyContinue)) {
-            $Script:Settings.LDAPSettings | Add-Member -Type NoteProperty -Name LDAPAlternativeModules -Value $false
+        if (-Not ($SyncedVariables.Settings.LDAPSettings | Get-Member -Name LDAPAlternativeModules -ErrorAction SilentlyContinue)) {
+            $SyncedVariables.Settings.LDAPSettings | Add-Member -Type NoteProperty -Name LDAPAlternativeModules -Value $false
         }
         $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked = $false
         $Script:AlternativeLDAPModule = $false
     }
-    if (-Not [String]::IsNullOrEmpty($Script:Settings.LDAPSettings.LDAPAttribute)) {
-        $Script:Attribute = $Script:Settings.LDAPSettings.LDAPAttribute
+    if (-Not [String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.LDAPAttribute)) {
+        $Script:Attribute = $SyncedVariables.Settings.LDAPSettings.LDAPAttribute
     }
-    if (-Not [String]::IsNullOrEmpty($Script:Settings.GatewayURI)) {
-        $Script:GatewayURI = $Script:Settings.GatewayURI
+    if (-Not [String]::IsNullOrEmpty($SyncedVariables.Settings.GatewayURI)) {
+        $Script:GatewayURI = $SyncedVariables.Settings.GatewayURI
     }
     if ((-Not [String]::IsNullOrEmpty($($SyncHash.WPFControl_tbLDAPUsername.Text))) -and (-Not [String]::IsNullOrEmpty($($SyncHash.WPFControl_pbLDAPPassword.Password)))) {
         $Script:LDAPCredential = try { New-Object System.Management.Automation.PSCredential ($SyncHash.WPFControl_tbLDAPUsername.Text, $(ConvertTo-SecureString $SyncHash.WPFControl_pbLDAPPassword.Password -AsPlainText -Force)) } catch { [PSCredential]::Empty }
     } else {
         $Script:LDAPCredential = [PSCredential]::Empty
     }
-    $Script:Settings.AppVersion = $Script:AppVersion
+    $SyncedVariables.Settings.AppVersion = $Script:AppVersion
 }
 function ConvertTo-PlainText {
     [CmdletBinding()]
@@ -730,19 +798,46 @@ function Invoke-SaveSettings {
     )
     Write-Verbose "Function: Invoke-SaveSettings"
     try {
-        $Script:Settings.GatewayURI = $SyncHash.WPFControl_tbGatewayURI.Text
-        $Script:Settings.QRSize = $SyncHash.WPFControl_tbQRSize.Text
-        $Script:Settings.LDAPSettings.LDAPServer = $SyncHash.WPFControl_tbLDAPServer.Text
-        $Script:Settings.LDAPSettings.LDAPUsername = $SyncHash.WPFControl_tbLDAPUsername.Text
-        $Script:Settings.LDAPSettings.LDAPPassword = try { ConvertTo-SecureString -String $($SyncHash.WPFControl_pbLDAPPassword.Password) -AsPlainText -Force -ErrorAction Stop } catch { $null }
-        $Script:Settings.LDAPSettings.LDAPAttribute = $SyncHash.WPFControl_tbLDAPAttribute.Text
-        $Script:Settings.LDAPSettings.LDAPAlternativeModules = $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked
-        Export-Clixml -Path $Path -InputObject $Script:Settings -Force
+        $SyncedVariables.Settings.GatewayURI = $SyncHash.WPFControl_tbGatewayURI.Text
+        $SyncedVariables.Settings.QRSize = $SyncHash.WPFControl_tbQRSize.Text
+        $SyncedVariables.Settings.LDAPSettings.LDAPServer = $SyncHash.WPFControl_tbLDAPServer.Text
+        $SyncedVariables.Settings.LDAPSettings.LDAPPort = $SyncHash.WPFControl_tbLDAPPort.Text
+        $SyncedVariables.Settings.LDAPSettings.LDAPUsername = $SyncHash.WPFControl_tbLDAPUsername.Text
+        $SyncedVariables.Settings.LDAPSettings.LDAPPassword = try { ConvertTo-SecureString -String $($SyncHash.WPFControl_pbLDAPPassword.Password) -AsPlainText -Force -ErrorAction Stop } catch { $null }
+        $SyncedVariables.Settings.LDAPSettings.LDAPAttribute = $SyncHash.WPFControl_tbLDAPAttribute.Text
+        $SyncedVariables.Settings.LDAPSettings.LDAPAlternativeModules = $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked
+        $SyncedVariables.Settings.AppVersion = $AppVersion
+        Export-CliXml -Path $Path -InputObject $SyncedVariables.Settings -Force
         Update-Gui
         Write-Verbose "Settings saved"
     } catch {
         Write-Verbose "Saving failed, $($_.Exception.Message)"
     }
+}
+
+function Invoke-EndApplication {
+    [CmdletBinding()]
+    param (
+        
+    )
+    Write-Verbose "Function: Invoke-EndApplication"
+    try {
+        $SyncHash.Form.Close()
+        $SyncHash.App.Shutdown()
+        try { $PoSH.EndInvoke($SyncedVariables.handle) } catch { }
+        $PoSH.RunSpace.Close()
+        $RunSpace.Close()
+        $RunSpace.Dispose()
+        $PoSH.Dispose()
+        if (-Not $NoHide) {
+            Stop-Process -Id $PID
+        } elseif ($Console) {
+            # return to console
+            [Win32.Functions]::ShowWindow($hWnd, $SW_SHOW)
+        }
+        Write-Verbose "OTP4ADC Ended!"
+        exit $ExitCode
+    } catch { "ERROR: $($_.Exception.Message)" } 
 }
 
 #region Alternative AD Functions
@@ -751,22 +846,49 @@ function Get-AdsiADDomain {
     [CmdletBinding()]
     Param(
         [System.Management.Automation.PSCredential]
-        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty
+        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
+
+        [String]$Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer,
+
+        [Int]$Port = [Int]$SyncedVariables.Settings.LDAPSettings.LDAPPort
     )
     Write-Verbose "Starting function: Get-AdsiADDomain"
-    if ($Credential -eq [PSCredential]::Empty) {
-        $root = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList "LDAP://RootDSE"
-    } else {
-        $root = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList "LDAP://RootDSE", $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+
+    $LDAPPath = "LDAP://"
+    if ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -ne 0)) {
+        $LDAPPath += "$($Server):$($Port)/"
+    } elseif ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -eq 0)) {
+        $LDAPPath += "$($Server)/"
     }
+    $LDAPPath += "RootDSE"
+    Write-Verbose "Path: `"$LDAPPath`""
+    if ($Credential -eq [PSCredential]::Empty) { 
+        $root = New-Object System.DirectoryServices.DirectoryEntry $LDAPPath
+    } else {
+        $root = New-Object System.DirectoryServices.DirectoryEntry $LDAPPath, $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+        Write-Verbose "Credential was provided"
+    }
+
     $forestConfig = $Root.Get("configurationNamingContext")
-    if ($Credential -eq [PSCredential]::Empty) {
-        $searchRoot = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList "LDAP://CN=Partitions,$forestConfig"
-    } else {
-        $searchRoot = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList "LDAP://CN=Partitions,$forestConfig", $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+    $LDAPPath = "LDAP://"
+    if ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -ne 0)) {
+        $LDAPPath += "$($Server):$($Port)/"
+    } elseif ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -eq 0)) {
+        $LDAPPath += "$($Server)/"
     }
-        
-    $adSearcher = [adsisearcher]"(&(objectcategory=crossref)(netbiosname=*))"
+    $LDAPPath = "LDAP://"
+    if (-Not [String]::IsNullOrEmpty($LDAPServer) -And -Not [String]::IsNullOrEmpty($LDAPPort)) {
+        $LDAPPath += "$($LDAPServer):$($LDAPPort)"
+    }
+    $LDAPPath += "CN=Partitions,$forestConfig"
+    if ($Credential -eq [PSCredential]::Empty) { 
+        $searchRoot = New-Object System.DirectoryServices.DirectoryEntry $LDAPPath
+    } else {
+        $searchRoot = New-Object System.DirectoryServices.DirectoryEntry $LDAPPath, $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+        Write-Verbose "Credential was provided"
+    }
+    $adSearcher = New-Object -TypeName System.DirectoryServices.DirectorySearcher
+    $adSearcher.Filter = "(&(objectcategory=crossref)(netbiosname=*))"
     $adSearcher.SearchRoot = $searchRoot
     $domains = $adSearcher.FindAll()
     Write-Output ([PSCustomObject]@{
@@ -777,26 +899,47 @@ function Get-AdsiADDomain {
     Write-Verbose "Ending function: Get-AdsiADDomain"
 }
         
-function Test-AdsiADCredential {
+function Test-AdsiADConnection {
     [CmdletBinding()]
     Param(
         [System.Management.Automation.PSCredential]
-        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty
+        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
+
+        [String]$Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer,
+
+        [Int]$Port = [Int]$SyncedVariables.Settings.LDAPSettings.LDAPPort
     )
-    Write-Verbose "Starting function: Test-AdsiADCredential"
-    $DomainDN = $(([adsisearcher]"").Searchroot.path)
+    Write-Verbose "Starting function: Test-AdsiADConnection"
     try {
-        $Domain = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $DomainDN, $($Credential.UserName), $($Credential.GetNetworkCredential().password)
-        $result = [bool]$Domain.distinguishedName
-        Write-Output $result
+        $result = $false
+        
+        $root = New-Object System.DirectoryServices.DirectoryEntry
+        $LDAPPath = "LDAP://"
+        Write-Verbose "Server: $Server, Port: $Port"
+        if ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -ne 0)) {
+            $LDAPPath += "$($Server):$($Port)/"
+        } elseif ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -eq 0)) {
+            $LDAPPath += "$($Server)/"
+        }
+        $LDAPPath += "RootDSE"
+        Write-Verbose "Path: `"$LDAPPath`""
+        if ($Credential -eq [PSCredential]::Empty) { 
+            $root = New-Object System.DirectoryServices.DirectoryEntry $LDAPPath
+        } else {
+            $root = New-Object System.DirectoryServices.DirectoryEntry $LDAPPath, $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+            Write-Verbose "Credential was provided"
+        }
+
+        $result = [bool]$root.defaultNamingContext
     } catch {
         Write-Verbose $($_.Exception.Message)
-        Write-Output $false
+        $result = $false
     }
-    Write-Verbose "Ending function: Test-AdsiADCredential"
+    Write-Verbose "Ending function: Test-AdsiADConnection"
+    Write-Output $result
 }
-    
-    
+
+   
 function Get-AdsiADUser {
     [CmdletBinding()]
     Param(
@@ -809,46 +952,47 @@ function Get-AdsiADUser {
         [String]$SearchBase,
         
         [System.Management.Automation.PSCredential]
-        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty
+        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
+
+        [String]$Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer,
+
+        [Int]$Port = [Int]$SyncedVariables.Settings.LDAPSettings.LDAPPort
         
     )
     Write-Verbose "Starting function: Get-AdsiADUser"
-    function ConvertFrom-HashTable {
-        [CmdletBinding()]
-        param(
-            [HashTable]$Collection
-        )
-        $Object = New-Object PSObject
-        foreach ($key in $Collection.keys) {
-            $Object | Add-Member -MemberType NoteProperty -Name $key -Value ($Collection.$Key | ForEach-Object { $_ })
-        }
-        return $Object
-    }
     #Source https://lazywinadmin.com/2013/10/powershell-using-adsi-with-alternate.html
-    $Searcher = New-Object -TypeName System.DirectoryServices.DirectorySearcher
-    $Searcher.Filter = "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))"
-    $Searcher.SizeLimit = "$SearchLimit"
-        
+
+    $LDAPPath = "LDAP://"
+    if ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -ne 0)) {
+        $LDAPPath += "$($Server):$($Port)/"
+    } elseif ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -eq 0)) {
+        $LDAPPath += "$($Server)/"
+    }
     if ([String]::IsNullOrEmpty($SearchBase)) {
-        $DomainDN = $(([adsisearcher]"").Searchroot.path)
+        $LDAPPath += (Get-AdsiADDomain -Server $Server -Port $Port -Credential $Credential).DistinguishedName
+    } elseif ($SearchBase -like "LDAP://*") {
+        $LDAPPath += $SearchBase -replace "LDAP://", $null
+    } elseif ($SearchBase -match '(?im)^(?:(?<cn>CN=(?<name>[^,]*)),)?(?:(?<path>(?:(?:CN|OU)=[^,]+,?)+),)?(?<domain>(?:DC=[^,]+,?)+)$') {
+        $LDAPPath += $SearchBase
     } else {
-        if ($SearchBase -notlike "LDAP://*") {
-            $DomainDN = "LDAP://$SearchBase"
-        } else {
-            $DomainDN = $SearchBase
-        }
+        $LDAPPath += (Get-AdsiADDomain -Server $Server -Port $Port -Credential $Credential).DistinguishedName
     }
-    if ($Credential -eq [PSCredential]::Empty) {
-        $Domain = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $DomainDN
+    if ($Credential -eq [PSCredential]::Empty) { 
+        $searchRoot = New-Object System.DirectoryServices.DirectoryEntry $LDAPPath
     } else {
-        $Domain = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $DomainDN, $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+        $searchRoot = New-Object System.DirectoryServices.DirectoryEntry $LDAPPath, $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+        Write-Verbose "Credential was provided"
     }
-    $Searcher.SearchRoot = $Domain
+    $adSearcher = New-Object -TypeName System.DirectoryServices.DirectorySearcher
+    $adSearcher.SearchRoot = $searchRoot
+    $adSearcher.Filter = "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))"
+    $adSearcher.SizeLimit = "$SearchLimit"
+        
     $Attributes += @("Name", "UserPrincipalName", "SamAccountName", "Sn", "GivenName", "distinguishedName")
     $Attributes = $Attributes | Select-Object -Unique
-    foreach ($item in $Attributes) { $searcher.PropertiesToLoad.Add($item) | out-null } 
+    foreach ($item in $Attributes) { $adSearcher.PropertiesToLoad.Add($item) | out-null } 
                 
-    $Users = $Searcher.FindAll()
+    $Users = $adSearcher.FindAll()
     foreach ($User in $Users) {
         Write-Output $(ConvertFrom-HashTable -Collection $User.Properties)
     }
@@ -858,35 +1002,61 @@ function Get-AdsiADUser {
 function Set-AdsiADUser {
     [CmdletBinding()]
     Param(
-        [String]$Path,
+        [String]$DistinguishedName,
         
         [String]$Attribute,
         
         [String]$NewValue,
         
         [System.Management.Automation.PSCredential]
-        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty
+        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
+
+        [String]$Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer,
+
+        [Int]$Port = [Int]$SyncedVariables.Settings.LDAPSettings.LDAPPort
         
     )
     Write-Verbose "Starting function: Set-AdsiADUser"
-    if ($Path -like "CN=*") {
-        $Path = "LDAP://$Path"
+    $LDAPPath = "LDAP://"
+    if ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -ne 0)) {
+        $LDAPPath += "$($Server):$($Port)/"
+    } elseif ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -eq 0)) {
+        $LDAPPath += "$($Server)/"
+    }
+
+    
+    if ($DistinguishedName -like "CN=*") {
+        $LDAPPath += $DistinguishedName
+    } else {
+        $LDAPPath += $DistinguishedName -replace "LDAP://", $null
     }
         
     if ($Credential -eq [PSCredential]::Empty) {
-        $User = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $Path
+        $UserObject = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $LDAPPath
     } else {
-        $User = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $Path, $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+        $UserObject = New-Object -TypeName System.DirectoryServices.DirectoryEntry -ArgumentList $LDAPPath, $($Credential.UserName), $($Credential.GetNetworkCredential().password)
+        Write-Verbose "Credential was provided"
     }
-    #$User = [ADSI]"$Path"
         
     if ([String]::IsNullOrEmpty($NewValue)) {
-        $User.PutEx(1, $Attribute, $null)
+        $UserObject.PutEx(1, $Attribute, $null)
     } else {
-        $User.$Attribute = $NewValue
+        $UserObject.$($SyncedVariables.Attribute) = $NewValue
     }
-    $User.SetInfo()
+    $UserObject.SetInfo()
     Write-Verbose "Ending function: Set-AdsiADUser"
+}
+
+function ConvertFrom-HashTable {
+    [CmdletBinding()]
+    param(
+        [HashTable]$Collection
+    )
+    $Object = New-Object PSObject
+    foreach ($key in $Collection.keys) {
+        $Object | Add-Member -MemberType NoteProperty -Name $key -Value ($Collection.$Key | ForEach-Object { $_ })
+    }
+    return $Object
 }
 
 #endregion Alternative AD Functions
@@ -1033,60 +1203,60 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
         $hWnd = (Get-Process -Id $PID).MainWindowHandle
         $Null = [Win32.Functions]::ShowWindow($hWnd, $SW_HIDE)
     }
-    <#(2)
-   $TypeDef = '[DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);' 
-   $asyncwindow = Add-Type -MemberDefinition $TypeDef -name Win32ShowWindowAsync -namespace Win32Functions -PassThru 
-   $null = $asyncwindow::ShowWindowAsync((Get-Process -PID $pid).MainWindowHandle, 0) 
-#>
-    #Clear Console Window
-    #Clear-Host
-    $Script:Settings = [PSCustomObject]@{
+
+    $SyncHash = [hashtable]::Synchronized(@{ })
+    $SyncedVariables = [hashtable]::Synchronized(@{ })
+
+    $SyncedVariables.Settings = [PSCustomObject]@{
         AppVersion   = $AppVersion
         GatewayURI   = $GatewayURI
         TokenText    = $TokenText
         QRSize       = $QRSize
         LDAPSettings = [PSCustomObject]@{
             LDAPServer             = $null
+            LDAPPort               = $null
             LDAPUsername           = $null
             LDAPPassword           = $null
             LDAPAttribute          = $Attribute
             LDAPAlternativeModules = $false
         }
     }
-    $AppSettingsFile = Join-Path -Path $env:APPDATA -ChildPath "OTP4ADC\Settings.xml"
-    New-Item -Path $(Split-Path -Path $AppSettingsFile -Parent) -ItemType Directory -Force | Out-Null
+    $SyncedVariables.SettingsFilename = Join-Path -Path $env:APPDATA -ChildPath "OTP4ADC\Settings.xml"
+    New-Item -Path $(Split-Path -Path $SyncedVariables.SettingsFilename -Parent) -ItemType Directory -Force | Out-Null
 
-    $SyncHash = [hashtable]::Synchronized(@{ })
-    $SyncHash.OTPUpdate = $True
-    $SyncHash.OTPTimeWindow = 30
-    $SyncHash.OTPLength = 6
-    $SyncHash.TokenText = 2
+    $SyncedVariables.OTPUpdate = $True
+    $SyncedVariables.OTPTimeWindow = 30
+    $SyncedVariables.OTPLength = 6
+    $SyncedVariables.TokenText = "2"
+    $SyncedVariables.CleanGUIUser = $false
     $SyncHash.Host = $host
     Write-Verbose "HashTable created"
     $RunSpace = [RunSpaceFactory]::CreateRunspace()
     $RunSpace.Open()
     Write-Verbose "RunSpace : $($RunSpace.RunSpaceStateInfo.State)"
     $RunSpace.SessionStateProxy.SetVariable('SyncHash', $SyncHash)
+    $RunSpace.SessionStateProxy.SetVariable('SyncedVariables', $SyncedVariables)
     $PoSH = [powershell]::Create()
     $PoSH.Runspace = $RunSpace
     $PoSH.AddScript( {
-            While ($SyncHash.OTPUpdate) {
-                if ($null -ne $SyncHash.OTPToken -and ($SyncHash.OTPToken.ValidTo -is [datetime])) {
-                    $SecondsLeft = ($SyncHash.OTPToken.ValidTo - (Get-Date)).TotalSeconds
+            While ($SyncedVariables.OTPUpdate) {
+                if ($null -ne $SyncedVariables.OTPToken -and ($SyncedVariables.OTPToken.ValidTo -is [datetime])) {
+                    $SecondsLeft = ($SyncedVariables.OTPToken.ValidTo - (Get-Date)).TotalSeconds
                     if ($SecondsLeft -lt 0) {
                         $syncHash.Form.Dispatcher.Invoke(
                             [action] {
                                 $SyncHash.WPFControl_tbTOTPToken.Text = "------"
                                 $SyncHash.WPFControl_pbTOTPToken.Value = 0
                                 $SyncHash.WPFControl_btnViewTOTPToken.Focus()
-                                $SyncHash.OTPUpdate = $false
-                                $SyncHash.OTPToken = $null
+                                $SyncHash.WPFControl_btnViewTOTPToken.IsEnabled = $true
+                                $SyncedVariables.OTPUpdate = $false
+                                $SyncedVariables.OTPToken = $null
                             }
                         )
                     } else {
                         $syncHash.Form.Dispatcher.Invoke(
                             [action] {
-                                $Progress = [int]($SecondsLeft / $SyncHash.OTPTimeWindow * 100)
+                                $Progress = [int]($SecondsLeft / $SyncedVariables.OTPTimeWindow * 100)
                                 $SyncHash.WPFControl_pbTOTPToken.Value = $Progress
                             }
                         )
@@ -1105,12 +1275,13 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:local="clr-namespace:OTP4ADC"
     mc:Ignorable="d" 
-    Title="OTP4ADC" SizeToContent="WidthAndHeight" ResizeMode="NoResize" Height="Auto" Width="Auto">
+    Title="OTP4ADC" SizeToContent="WidthAndHeight" ResizeMode="NoResize" Height="Auto" Width="Auto" WindowStartupLocation="CenterOwner">
 <Grid Margin="2" >
     <TabControl >
         <TabItem Header="OTP">
             <Grid>
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
@@ -1142,10 +1313,10 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
                         <ListView Name="lvUsernames" Grid.Row="1" Grid.Column="1" Grid.RowSpan="2" VerticalContentAlignment="Top" Margin="2" Height="150" Width="320" FontSize="8" SelectionMode="Single" TabIndex="30" >
                             <ListView.View>
                                 <GridView>
-                                    <GridViewColumn Header="SamAccountName" DisplayMemberBinding="{Binding SamAccountName}" />
-                                    <GridViewColumn Header="UPN" DisplayMemberBinding="{Binding UserPrincipalName}" />
-                                    <GridViewColumn Header="GivenName" DisplayMemberBinding="{Binding GivenName}" />
-                                    <GridViewColumn Header="Surname" DisplayMemberBinding="{Binding Surname}" />
+                                    <GridViewColumn Header="SamAccountName" DisplayMemberBinding="{Binding SamAccountName}" Width="70"/>
+                                    <GridViewColumn Header="UPN" DisplayMemberBinding="{Binding UserPrincipalName}" Width="140"/>
+                                    <GridViewColumn Header="GivenName" DisplayMemberBinding="{Binding GivenName}" Width="50"/>
+                                    <GridViewColumn Header="Surname" DisplayMemberBinding="{Binding Surname}" Width="50"/>
                                 </GridView>
                             </ListView.View>
                         </ListView>
@@ -1153,24 +1324,25 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
                         <Label Name="lblAttribute" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Top" Margin="2" Content="Attribute" Width="90" />
                         <TextBox Name="tbAttribute" Grid.Row="3" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Can be pre-configured by starting the application with the -Attribute '&lt;AD Attribute&gt;' parameter, if not configured it uses the default 'userParameters'" />
                         <Label Name="lblOtp" Grid.Row="4" Grid.Column="0" VerticalContentAlignment="Top" Margin="2" Content="OTP" Width="90"  VerticalAlignment="Top"/>
-                        <ListView Name="lvOtps" Grid.Row="4" Grid.Column="1" Grid.RowSpan="3" VerticalContentAlignment="Top" Margin="2"  Width="320" FontSize="10" SelectionMode="Single" TabIndex="40" Height="116"  >
+                        <ListView Name="lvOtps" Grid.Row="4" Grid.Column="1" Grid.RowSpan="3" VerticalContentAlignment="Top" Margin="2"  Width="320" FontSize="10" SelectionMode="Single" TabIndex="40" Height="100"  >
                             <ListView.View>
                                 <GridView>
-                                    <GridViewColumn Header="Device Name" Width="Auto" DisplayMemberBinding="{Binding DeviceName}" />
-                                    <GridViewColumn Header="Secret" Width="Auto" DisplayMemberBinding="{Binding Secret}" />
-                                </GridView>
+                                <GridViewColumn Header="Device Name" DisplayMemberBinding="{Binding DeviceName}" Width="100"/>
+                                <GridViewColumn Header="Secret" DisplayMemberBinding="{Binding Secret}" Width="210"/>
+                            </GridView>
                             </ListView.View>
                         </ListView>
-                        <StackPanel Grid.Row="4" Grid.Column="2" Grid.RowSpan="3" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="1">
+                        <StackPanel Grid.Row="4" Grid.Column="2" Grid.RowSpan="3" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="0">
                             <Button Name="btnDeleteOtp" VerticalContentAlignment="Center" Margin="2" Content="Delete" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Delete the selected secret" />
                             <Button Name="btnSaveOtp" VerticalContentAlignment="Center" Margin="2" Content="Save" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Save the current secret(s) to the user account" />
                             <Button Name="btnExportPosh" VerticalContentAlignment="Center" Margin="2" Content="Export PoSH" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Export the PowerShell command to make the necessary changes." />
                         </StackPanel>
                     </Grid>
                 </GroupBox>
-                <GroupBox Grid.Row="0" Grid.Column="1" Header="QR" Height="Auto" Margin="2" Width="Auto">
+                <GroupBox Grid.Row="0" Grid.Column="1" Grid.RowSpan="2" Header="QR" Height="Auto" Margin="2" Width="Auto">
                     <Grid Margin="3">
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
@@ -1178,12 +1350,13 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <Image Name="ImgQR" Grid.Row="0" Grid.Column="0" Margin="2" Height="200" Width="200" Visibility="Visible" Stretch="UniformToFill" RenderTransformOrigin="0.5,0.5" />
-                        <Label Name="lblQR" Grid.Row="1" Grid.Column="0" Margin="2" Content="" VerticalAlignment="Bottom" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Visibility="Visible" FontWeight="Bold" FontSize="16"/>
-                        <Button Name="btnExportQR" Grid.Row="2" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="Export QR" Width="100" VerticalAlignment="Bottom" Height="27" TabIndex="100" ToolTip="Export and save the QR code" />
+                        <Label Name="lbTokenUserText" Grid.Row="0" Grid.Column="0" Margin="2" Content="" VerticalAlignment="Center" HorizontalContentAlignment="left" VerticalContentAlignment="Center" Width="200" Visibility="Visible" FontWeight="Bold" FontSize="8" />
+                        <Image Name="ImgQR" Grid.Row="1" Grid.Column="0" Margin="2" Height="200" Width="200" Visibility="Visible" Stretch="UniformToFill" RenderTransformOrigin="0.5,0.5" />
+                        <Label Name="lblQR" Grid.Row="2" Grid.Column="0" Margin="2" Content="" VerticalAlignment="Bottom" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Visibility="Visible" FontWeight="Bold" FontSize="14"/>
+                        <Button Name="btnExportQR" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="Export QR" Width="100" VerticalAlignment="Bottom" Height="27" TabIndex="100" ToolTip="Export and save the QR code" />
                     </Grid>
                 </GroupBox>
-                <GroupBox Grid.Row="2" Grid.Column="0" Header="OTP Secret" Height="Auto" Margin="2" Width="Auto">
+                <GroupBox Grid.Row="2" Grid.Column="0" Grid.RowSpan="2" Header="OTP Secret" Height="Auto" Margin="2" Width="Auto">
                     <Grid Margin="3">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -1214,7 +1387,7 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
                         </StackPanel>
                     </Grid>
                 </GroupBox>
-                <GroupBox Name="gbToken" Grid.Row="1" Grid.Column="1" Header="Token" Height="Auto" Margin="2" Width="Auto" IsEnabled="False">
+                <GroupBox Name="gbToken" Grid.Row="2" Grid.Column="1" Header="Token" Height="Auto" Margin="2" Width="Auto" IsEnabled="False">
                     <Grid Margin="3">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -1229,7 +1402,7 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
                         <ProgressBar Name="pbTOTPToken" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Height="5" Margin="2"/>
                     </Grid>
                 </GroupBox>
-                <Image Name="AppImage"  Grid.Column="1"  Grid.Row="2" HorizontalAlignment="Right" Height="100" VerticalAlignment="Bottom" Width="100"/>
+                <Image Name="AppImage"  Grid.Column="1"  Grid.Row="3" HorizontalAlignment="Right" Height="100" VerticalAlignment="Bottom" Width="100"/>
             </Grid>
         </TabItem>
         <TabItem Header="Settings">
@@ -1244,8 +1417,12 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Button Name="btnSaveSettings" Grid.Row="0" Grid.Column="2" VerticalContentAlignment="Center" Height="27" Margin="2,11,2,2" Content="Save" Width="100" TabIndex="300" ToolTip="Search for user" VerticalAlignment="Top"/>
-                <GroupBox Name="gbGeneral" Grid.Row="0" Grid.Column="0" Header="LDAP Settings" Height="Auto" Margin="2" Width="Auto" IsEnabled="True">
+                <StackPanel Grid.Row="0" Grid.Column="2" Grid.RowSpan="3" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="0,10,0,0">
+                    <Button Name="btnSaveSettings" VerticalContentAlignment="Center" Height="27" Margin="2" Content="Save" Width="100" TabIndex="300" ToolTip="Search for user" VerticalAlignment="Top"/>
+                    <Button Name="btnTestSettings" VerticalContentAlignment="Center" Height="27" Margin="2" Content="Test" Width="100" TabIndex="300" ToolTip="Test and validate the settings" VerticalAlignment="Top"/>
+                </StackPanel>
+                
+                <GroupBox Name="gbGeneral" Grid.Row="0" Grid.Column="0" Header="General Settings" Height="Auto" Margin="2" Width="Auto" IsEnabled="True">
                     <Grid Margin="3">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -1283,7 +1460,9 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <Label Name="lblLDAPServer" Grid.Row="0" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Server" />
-                        <TextBox Name="tbLDAPServer" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP server fqdn or ip address" TabIndex="100" />
+                        <TextBox Name="tbLDAPServer" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP server fqdn, ip address or domain fqdn. Leave empty for default value." TabIndex="100" />
+                        <Label Name="lblLDAPPort" Grid.Row="1" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Port" />
+                        <TextBox Name="tbLDAPPort" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP server port, 0 for default. E.g. 636" TabIndex="100" />
                         <Label Name="lblLDAPUsername" Grid.Row="2" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Username" />
                         <TextBox Name="tbLDAPUsername" Grid.Row="2" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP username with the required permissions" TabIndex="120" />
                         <Label Name="lblLDAPPassword" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Password" />
@@ -1308,8 +1487,6 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     [XML]$XAML = $InputXML -replace 'mc:Ignorable="d"', '' -replace "x:N", 'N' -replace '^<Win.*', '<Window'
 
     try {
-        #$App = [Windows.Application]::new()
-        #$Form = [Windows.Markup.XamlReader]::Load( [Xml.XmlNodeReader]::new($XAML) )
         $SyncHash.App = [Windows.Application]::new()
         $SyncHash.Form = [Windows.Markup.XamlReader]::Load( (New-Object System.Xml.XmlNodeReader $XAML) )
     } catch {
@@ -1326,43 +1503,20 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         }
     }
 
-    Write-Verbose "Defining intractable elements"
-    #All WPF GUI variables
-    #$Controls = Get-Variable WPFControl_*
-
     #Global variable, check if changes are saved
-    $SyncHash.Saved = $true
+    $SyncedVariables.Saved = $true
 
     #Loading settings from file
-    Invoke-LoadSettings -Path $AppSettingsFile
+    Invoke-LoadSettings -Path $SyncedVariables.SettingsFilename
 
     #region Event handlers
 
-    #System.ComponentModel.CancelEventHandler Closing(System.Object, System.ComponentModel.CancelEventArgs)
     $SyncHash.Form.add_Closing( {
             Write-Verbose "GUI Closing"
-            try {
-                Invoke-SaveSettings -Path $AppSettingsFile
-                Invoke-CleanOTPToken
-                $SyncHash.Form.Close()
-                $SyncHash.App.Shutdown()
-                $SyncHash.App.Exit()
-                try { $PoSH.EndInvoke($handle) } catch { }
-                $RunSpace.Close()
-                $PoSH.Dispose()
-                if (-Not $NoHide) {
-                    Stop-Process -Id $PID
-                } elseif ($Console) {
-                    # return to console
-                    [Win32.Functions]::ShowWindow($hWnd, $SW_SHOW)
-                }
-                exit $ExitCode
-            } catch { "ERROR: $($_.Exception.Message)" } 
+            Invoke-SaveSettings -Path $SyncedVariables.SettingsFilename
+            Invoke-CleanOTPToken
         }
     )
-
-    #System.EventHandler Initialized(System.Object, System.EventArgs)
-    #System.EventHandler Activated(System.Object, System.EventArgs)
 
     $SyncHash.Form.add_Loaded( {
             Write-Verbose "GUI Loaded"
@@ -1375,22 +1529,20 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         }
     )
 
-    #System.Windows.DependencyPropertyChangedEventHandler IsVisibleChanged(System.Object, System.Windows.DependencyPropertyChangedEventArgs)
-
     $SyncHash.WPFControl_btnGenerateSecret.Add_Click( { # btnGenerateSecret Click Action
             Update-Gui
             Invoke-CleanGUIQRImage
-            $SyncHash.B32Secret = Get-OTPSecret
-            #$SyncHash.B32Secret = New-AuthenticatorSecret
-            $SyncHash.WPFControl_tbSecret.Text = $SyncHash.B32Secret
+            $SyncedVariables.B32Secret = Get-OTPSecret
+            #$SyncedVariables.B32Secret = New-AuthenticatorSecret
+            $SyncHash.WPFControl_tbSecret.Text = $SyncedVariables.B32Secret
             if (-Not $SyncHash.WPFControl_tbDeviceName.IsEnabled) { $SyncHash.WPFControl_tbDeviceName.IsEnabled = $true }
         }
     )
 
     $SyncHash.WPFControl_btnClear.Add_Click( 
         { # btnClear Click Action
-            Update-Gui
             Reset-GUIForm
+            Update-Gui
         }
     )
 
@@ -1398,11 +1550,11 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         { # btnDeleteOtp Click Action
             Update-Gui
             $SelectedItem = $SyncHash.WPFControl_lvOtps.SelectedItem
-            $SyncHash.DeviceSecrets = @($SyncHash.DeviceSecrets | Where-Object { $_.Secret -ne $SelectedItem.Secret })
-            $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncHash.DeviceSecrets
+            $SyncedVariables.DeviceSecrets = @($SyncedVariables.DeviceSecrets | Where-Object { $_.Secret -ne $SelectedItem.Secret })
+            $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncedVariables.DeviceSecrets
             if (-Not $SyncHash.WPFControl_btnSaveOtp.IsEnabled) { $SyncHash.WPFControl_btnSaveOtp.IsEnabled = $true }
             if (-Not $SyncHash.WPFControl_btnExportPosh.IsEnabled) { $SyncHash.WPFControl_btnExportPosh.IsEnabled = $true }
-            $SyncHash.Saved = $false
+            $SyncedVariables.Saved = $false
         }
     )
 
@@ -1418,7 +1570,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         { # btnExportPosh Click Action
             Update-Gui
             Save-OtpToUserExportCommand
-            if ($SyncHash.Saved) {
+            if ($SyncedVariables.Saved) {
                 Invoke-CleanGUIUser
             }
         }
@@ -1427,22 +1579,22 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     $SyncHash.WPFControl_btnAddQR.Add_Click( 
         { # btnAddQR Click Action
             Update-Gui
-            if ($SyncHash.DeviceSecrets.Count -ge 4) {
+            if ($SyncedVariables.DeviceSecrets.Count -ge 4) {
                 $null = [System.Windows.MessageBox]::Show("The maximum of allowed devices reached.`nTo continue remove one device!", "Maximum Reached!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
-            } elseif ($SyncHash.DeviceSecrets | Where-Object DeviceName -eq $($SyncHash.WPFControl_tbDeviceName.Text)) {
+            } elseif ($SyncedVariables.DeviceSecrets | Where-Object DeviceName -eq $($SyncHash.WPFControl_tbDeviceName.Text)) {
                 $null = [System.Windows.MessageBox]::Show("The Device Name `"$($SyncHash.WPFControl_tbDeviceName.Text)`" already exists", "Double Entry!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
-            } elseif ($SyncHash.DeviceSecrets | Where-Object Secret -eq $($SyncHash.B32Secret)) {
+            } elseif ($SyncedVariables.DeviceSecrets | Where-Object Secret -eq $($SyncedVariables.B32Secret)) {
                 $null = [System.Windows.MessageBox]::Show("The Secret already exists!`nGenerate a new secret", "Double Entry!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
             } else {
                 if (-Not $SyncHash.WPFControl_btnSaveOtp.IsEnabled) { $SyncHash.WPFControl_btnSaveOtp.IsEnabled = $true }
                 if (-Not $SyncHash.WPFControl_btnExportPosh.IsEnabled) { $SyncHash.WPFControl_btnExportPosh.IsEnabled = $true }
-                $SyncHash.DeviceSecrets += [PSCustomObject]@{
+                $SyncedVariables.DeviceSecrets += [PSCustomObject]@{
                     DeviceName = $($SyncHash.WPFControl_tbDeviceName.Text)
-                    Secret     = $($SyncHash.B32Secret)
+                    Secret     = $($SyncedVariables.B32Secret)
                 }
-                $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncHash.DeviceSecrets
+                $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncedVariables.DeviceSecrets
             }
-            $SyncHash.Saved = $false
+            $SyncedVariables.Saved = $false
             Invoke-CleanGUIQR
         }
     )
@@ -1464,7 +1616,9 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     $SyncHash.WPFControl_tbAttribute.add_TextChanged( 
         { 
             Write-Verbose "tbAttribute Text Changed"
-            $SyncHash.Attribute = $SyncHash.WPFControl_tbAttribute.Text
+            $SyncedVariables.Attribute = $SyncHash.WPFControl_tbAttribute.Text
+            Write-Verbose "New Value: $($SyncedVariables.Attribute) | Saved value: $($SyncedVariables.Settings.LDAPSettings.LDAPAttribute)"
+            Invoke-CleanGUIUser
         }
     )
 
@@ -1508,16 +1662,16 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             Invoke-CleanGUIQR
             $SelectedItem = $SyncHash.WPFControl_lvUsernames.SelectedItem
             if (-Not [String]::IsNullOrEmpty($($SelectedItem.Attribute))) {
-                $SyncHash.DeviceSecrets = @()
-                $SyncHash.DeviceSecrets += ConvertFrom-Attribute -Data $SelectedItem.Attribute
-                $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncHash.DeviceSecrets
-                if ($SyncHash.DeviceSecrets.Count -eq 1) {
+                $SyncedVariables.DeviceSecrets = @()
+                $SyncedVariables.DeviceSecrets += ConvertFrom-Attribute -Data $SelectedItem.Attribute
+                $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncedVariables.DeviceSecrets
+                if ($SyncedVariables.DeviceSecrets.Count -eq 1) {
                     $SyncHash.WPFControl_lvOtps.SelectedIndex = 0
                 }
                 if (-Not $SyncHash.WPFControl_tbDeviceName.IsEnabled) { $SyncHash.WPFControl_tbDeviceName.IsEnabled = $true }
             } else {
                 $SyncHash.WPFControl_lvOtps.ItemsSource = $null
-                $SyncHash.DeviceSecrets = @()
+                $SyncedVariables.DeviceSecrets = @()
                 if ($SyncHash.WPFControl_tbDeviceName.IsEnabled) { $SyncHash.WPFControl_tbDeviceName.IsEnabled = $false }
             }
             if (-Not [String]::IsNullOrEmpty($($SelectedItem.UserPrincipalName))) {
@@ -1540,8 +1694,9 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                 if (-Not $SyncHash.WPFControl_gbToken.IsEnabled) { $SyncHash.WPFControl_gbToken.IsEnabled = $true }
                 $SelectedItem = $SyncHash.WPFControl_lvOtps.SelectedItem
                 $SyncHash.WPFControl_tbSecret.Text = $SelectedItem.Secret
-                $SyncHash.B32Secret = $SelectedItem.Secret
+                $SyncedVariables.B32Secret = $SelectedItem.Secret
                 $SyncHash.WPFControl_tbDeviceName.Text = $SelectedItem.DeviceName
+                if (-Not $SyncHash.WPFControl_btnViewTOTPToken.IsEnabled) { $SyncHash.WPFControl_btnViewTOTPToken.IsEnabled = $true }
             }
         }
     )
@@ -1552,37 +1707,16 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             if ($QRGeneration) {
                 Get-GUIQRImage
                 Update-Gui
-                $SelectedItem = $SyncHash.WPFControl_lvUsernames.SelectedItem
-                $SamAccountName = $SelectedItem.SamAccountName
-                $UserPrincipalName = $SelectedItem.UserPrincipalName
                 $DeviceName = $SyncHash.WPFControl_tbDeviceName.Text
-                $Target = $SyncHash.WPFControl_tbGateway.Text
-            
+                
+                # Building OTP Token           
                 $OTPUri = "otpauth://totp/"
-                Write-Verbose "Using TokenText ID: $($SyncHash.TokenText)"
-                switch ([String]$SyncHash.TokenText) {
-                    "1" {
-                        # username@domain.com
-                        $OTPUri += [Uri]::EscapeDataString($('{0}' -f $UserPrincipalName))
-                        Break
-                    }
-                    "2" {
-                        #username@gateway.domain.com
-                        $OTPUri += [Uri]::EscapeDataString($('{0}@{1}' -f $SamAccountName, $Target))
-                        Break
-                    }
-                    "3" {
-                        #username@domain.com@gateway.domain.com
-                        $OTPUri += [Uri]::EscapeDataString($('{0}@{1}' -f $UserPrincipalName, $Target))
-                        Break
-                    }
-                    Default {
-                        Write-Verbose "Could not match the TokenText ID! Using the default value."
-                        $OTPUri += [Uri]::EscapeDataString($('{0}' -f $UserPrincipalName))
-                        Break
-                    }
-                }
-                $OTPUri += "?secret={0}&device={1}" -f $SyncHash.B32Secret, $DeviceName
+
+                Write-Verbose "Using TokenText ID: $($SyncedVariables.TokenText) with text: `"$($SyncedVariables.SelectedTokenText)`""
+                $SyncHash.WPFControl_lbTokenUserText.Content = $SyncedVariables.SelectedTokenText
+
+                $OTPUri += [Uri]::EscapeDataString($($SyncedVariables.SelectedTokenText))
+                $OTPUri += "?secret={0}&device={1}" -f $SyncedVariables.B32Secret, $DeviceName
                 Write-Verbose "OTP Uri: $OTPUri"
                 $Script:QRImage = New-QRTOTPImage -URI $OTPUri -OutStream
             
@@ -1622,14 +1756,15 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             # btnViewTOTPToken Click Action
             Write-Verbose "btnViewTOTPToken Click"
             try {
-                $SyncHash.OTPToken = Get-OTPToken -B32Secret $SyncHash.B32Secret -TimeWindow $SyncHash.OTPTimeWindow -OTPLength $SyncHash.OTPLength
-                $SyncHash.WPFControl_tbTOTPToken.Text = $SyncHash.OTPToken.OTP
+                $SyncedVariables.OTPToken = Get-OTPToken -B32Secret $SyncedVariables.B32Secret -TimeWindow $SyncedVariables.OTPTimeWindow -OTPLength $SyncedVariables.OTPLength
+                $SyncHash.WPFControl_tbTOTPToken.Text = $SyncedVariables.OTPToken.OTP
                 $SyncHash.WPFControl_tbTOTPToken.SelectAll()
                 $SyncHash.WPFControl_tbTOTPToken.Focus()
-                try { $SyncHash.OTPToken.OTP | clip.exe } catch { }
-                $SyncHash.OTPUpdate = $true
-                $handle = $PoSH.BeginInvoke()
-                Write-Verbose  $SyncHash.OTPToken
+                try { $SyncedVariables.OTPToken.OTP | clip.exe } catch { }
+                $SyncedVariables.OTPUpdate = $true
+                $SyncedVariables.handle = $PoSH.BeginInvoke()
+                $SyncHash.WPFControl_btnViewTOTPToken.IsEnabled = $false
+                Write-Verbose  $SyncedVariables.OTPToken
             } catch {
                 Write-Verbose "$($_.Exception.Message)"
             }
@@ -1640,27 +1775,59 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             # btnSaveSettings Click Action
             Write-Verbose "btnSaveSettings Click"
             try {
-                Invoke-SaveSettings -Path $AppSettingsFile
-                Invoke-LoadSettings -Path $AppSettingsFile
+                Invoke-SaveSettings -Path $SyncedVariables.SettingsFilename
+                Invoke-LoadSettings -Path $SyncedVariables.SettingsFilename
                 Invoke-LoadModules
+                Reset-GUIForm
             } catch {
                 Write-Verbose "$($_.Exception.Message)"
             }
         }
     )
-
+    
+    $SyncHash.WPFControl_btnTestSettings.Add_Click( {
+            # btnTestSettings Click Action
+            Write-Verbose "btnTestSettings Click"
+            $SyncHash.WPFControl_btnTestSettings.IsEnabled = $false
+            $SyncHash.WPFControl_btnTestSettings.Content = "Checking..."
+            Update-Gui
+            try {
+                try {
+                    $Credential = New-Object System.Management.Automation.PSCredential ($SyncHash.WPFControl_tbLDAPUsername.Text, $(ConvertTo-SecureString $SyncHash.WPFControl_pbLDAPPassword.Password -AsPlainText -Force))
+                } catch {
+                    $Credential = [PSCredential]::Empty
+                }
+                if (Test-AdsiADConnection -Server $SyncHash.WPFControl_tbLDAPServer.Text -Port $SyncHash.WPFControl_tbLDAPPort.Text -Credential $Credential) {
+                    $null = [System.Windows.MessageBox]::Show("Test OK!", "Test", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information)
+                } else {
+                    $null = [System.Windows.MessageBox]::Show("The test failed!", "Test", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+                }
+                $SyncHash.WPFControl_btnTestSettings.Content = "Test"
+                $SyncHash.WPFControl_btnTestSettings.IsEnabled = $true
+            } catch {
+                Write-Verbose "$($_.Exception.Message)"
+            }
+        }
+    )
     $SyncHash.WPFControl_tbQRSize.Add_TextChanged( {
-            # tbQRSize TExt Changed Event
+            # tbQRSize Text Changed Event
             # Only allow numbers
             $this.Text = $this.Text -replace '\D', $null
         })
 
     #TokenText Handler
     [System.Windows.RoutedEventHandler]$Script:TokenTextCheckedEventHandler = {
-        Write-Verbose "TokenText RadioButton Checked event"
-        $SyncHash.TokenText = [Int]($_.source.Name -replace 'rbTokenTextOption', $null)
-        Write-Verbose $SyncHash.TokenText
+        Write-Verbose "TokenText Checked Event"
+        $SyncedVariables.TokenText = ($_.source.Name -replace 'rbTokenTextOption', $null)
+        Invoke-UpdateTokenText
+        Write-Verbose $SyncedVariables.TokenText
     }
+
+    $SyncHash.WPFControl_tbLDAPPort.Add_TextChanged( {
+            # tbLDAPPort Text Changed Event
+            # Only allow numbers
+            $this.Text = $this.Text -replace '\D', $null
+        })
 
     $SyncHash.WPFControl_gbTokenText.AddHandler(
         [System.Windows.Controls.RadioButton]::CheckedEvent, $TokenTextCheckedEventHandler
@@ -1672,3 +1839,5 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     # Show/Run the App
     $SyncHash.App.Run($SyncHash.Form) | Out-Null
 }
+Invoke-EndApplication
+Write-Verbose "Bye, thank you for using OTP4ADC"
