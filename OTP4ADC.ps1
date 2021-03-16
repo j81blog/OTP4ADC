@@ -22,7 +22,7 @@
     Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v0.4.2
+    Version   : v0.4.3
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -70,7 +70,7 @@ Param(
     [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
     [String]$ExportPath
 )
-$AppVersion = "v0.4.2"
+$AppVersion = "v0.4.3"
 
 #region functions
 function New-QRTOTPImage {
@@ -367,8 +367,8 @@ function Search-User {
                 Properties = @($SyncedVariables.Attribute)
                 LDAPFilter = "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))"
             }
-            if (-Not ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty)) {
-                $Params.Credential = $Script:LDAPCredential
+            if (-Not ($null -eq $SyncedVariables.LDAPCredential -or $SyncedVariables.LDAPCredential -eq [PSCredential]::Empty)) {
+                $Params.Credential = $SyncedVariables.LDAPCredential
             }
             if (-Not [String]::IsNullOrEmpty($($SyncedVariables.Settings.LDAPSettings.LDAPServer))) {
                 $Params.Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer
@@ -486,8 +486,8 @@ function Save-OtpToUser {
                     Replace  = @{ "$($SyncedVariables.Attribute)" = $NewOTPString }
                     Identity = $DistinguishedName
                 }
-                if (-Not ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty)) {
-                    $Params.Credential = $Script:LDAPCredential
+                if (-Not ($null -eq $SyncedVariables.LDAPCredential -or $SyncedVariables.LDAPCredential -eq [PSCredential]::Empty)) {
+                    $Params.Credential = $SyncedVariables.LDAPCredential
                 }
                 if (-Not [String]::IsNullOrEmpty($($SyncedVariables.Settings.LDAPSettings.LDAPServer))) {
                     $Params.Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer
@@ -509,8 +509,8 @@ function Save-OtpToUser {
                     Clear = @("$($SyncedVariables.Attribute)")
                     Identity = $DistinguishedName
                 }
-                if (-Not ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty)) {
-                    $Params.Credential = $Script:LDAPCredential
+                if (-Not ($null -eq $SyncedVariables.LDAPCredential -or $SyncedVariables.LDAPCredential -eq [PSCredential]::Empty)) {
+                    $Params.Credential = $SyncedVariables.LDAPCredential
                 }
                 if (-Not [String]::IsNullOrEmpty($($SyncedVariables.Settings.LDAPSettings.LDAPServer))) {
                     $Params.Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer
@@ -667,24 +667,25 @@ function Invoke-LoadModules {
         if ($Script:AlternativeLDAPModule) {
             Write-Verbose "Using Alternative AD Modules"
             if ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbLDAPServer.Text))) {
-                if ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty) {
+                if ($null -eq $SyncedVariables.LDAPCredential -or $SyncedVariables.LDAPCredential -eq [PSCredential]::Empty) {
                     $DNSRoot = Get-AdsiADDomain | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
                     $SyncHash.WPFControl_tbLDAPServer.Text = $DNSRoot
                 } else {
-                    $DNSRoot = Get-AdsiADDomain -Credential $Script:LDAPCredential | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
+                    $DNSRoot = Get-AdsiADDomain -Credential $SyncedVariables.LDAPCredential | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
                     $SyncHash.WPFControl_tbLDAPServer.Text = $DNSRoot
                 }
                 Write-Verbose "Retrieved the default domain fqdn, $($SyncHash.WPFControl_tbLDAPServer.Text)"
             }
+            if ($SyncHash.WPFControl_gbUser.IsEnabled -eq $false) { $SyncHash.WPFControl_gbUser.IsEnabled = $true }
         } elseif (get-module -ListAvailable  ActiveDirectory -ErrorAction SilentlyContinue) {
             Write-Verbose "Loading ActiveDirectory Module"
             Import-Module -Name ActiveDirectory -Verbose:$False
             if ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbLDAPServer.Text))) {
-                if ($null -eq $Script:LDAPCredential -or $Script:LDAPCredential -eq [PSCredential]::Empty) {
+                if ($null -eq $SyncedVariables.LDAPCredential -or $SyncedVariables.LDAPCredential -eq [PSCredential]::Empty) {
                     $DNSRoot = Get-ADDomain -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
                     $SyncHash.WPFControl_tbLDAPServer.Text = $DNSRoot
                 } else {
-                    $DNSRoot = Get-ADDomain -Credential $Script:LDAPCredential -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
+                    $DNSRoot = Get-ADDomain -Credential $SyncedVariables.LDAPCredential -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DNSRoot -ErrorAction SilentlyContinue
                     $SyncHash.WPFControl_tbLDAPServer.Text = $DNSRoot
                 }
                 Write-Verbose "Retrieved the default domain fqdn, $($SyncHash.WPFControl_tbLDAPServer.Text)"
@@ -766,9 +767,9 @@ function Invoke-LoadSettings {
         $Script:GatewayURI = $SyncedVariables.Settings.GatewayURI
     }
     if ((-Not [String]::IsNullOrEmpty($($SyncHash.WPFControl_tbLDAPUsername.Text))) -and (-Not [String]::IsNullOrEmpty($($SyncHash.WPFControl_pbLDAPPassword.Password)))) {
-        $Script:LDAPCredential = try { New-Object System.Management.Automation.PSCredential ($SyncHash.WPFControl_tbLDAPUsername.Text, $(ConvertTo-SecureString $SyncHash.WPFControl_pbLDAPPassword.Password -AsPlainText -Force)) } catch { [PSCredential]::Empty }
+        $SyncedVariables.LDAPCredential = try { New-Object System.Management.Automation.PSCredential ($SyncHash.WPFControl_tbLDAPUsername.Text, $(ConvertTo-SecureString $SyncHash.WPFControl_pbLDAPPassword.Password -AsPlainText -Force)) } catch { [PSCredential]::Empty }
     } else {
-        $Script:LDAPCredential = [PSCredential]::Empty
+        $SyncedVariables.LDAPCredential = [PSCredential]::Empty
     }
     $SyncedVariables.Settings.AppVersion = $Script:AppVersion
 }
@@ -846,7 +847,7 @@ function Get-AdsiADDomain {
     [CmdletBinding()]
     Param(
         [System.Management.Automation.PSCredential]
-        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
+        [System.Management.Automation.Credential()]$Credential = $(try {$SyncedVariables.LDAPCredential } catch {[System.Management.Automation.PSCredential]::Empty}),
 
         [String]$Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer,
 
@@ -876,10 +877,6 @@ function Get-AdsiADDomain {
     } elseif ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -eq 0)) {
         $LDAPPath += "$($Server)/"
     }
-    $LDAPPath = "LDAP://"
-    if (-Not [String]::IsNullOrEmpty($LDAPServer) -And -Not [String]::IsNullOrEmpty($LDAPPort)) {
-        $LDAPPath += "$($LDAPServer):$($LDAPPort)"
-    }
     $LDAPPath += "CN=Partitions,$forestConfig"
     if ($Credential -eq [PSCredential]::Empty) { 
         $searchRoot = New-Object System.DirectoryServices.DirectoryEntry $LDAPPath
@@ -903,7 +900,7 @@ function Test-AdsiADConnection {
     [CmdletBinding()]
     Param(
         [System.Management.Automation.PSCredential]
-        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
+        [System.Management.Automation.Credential()]$Credential = $(try {$SyncedVariables.LDAPCredential } catch {[System.Management.Automation.PSCredential]::Empty}),
 
         [String]$Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer,
 
@@ -952,7 +949,7 @@ function Get-AdsiADUser {
         [String]$SearchBase,
         
         [System.Management.Automation.PSCredential]
-        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
+        [System.Management.Automation.Credential()]$Credential = $(try {$SyncedVariables.LDAPCredential } catch {[System.Management.Automation.PSCredential]::Empty}),
 
         [String]$Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer,
 
@@ -969,14 +966,15 @@ function Get-AdsiADUser {
         $LDAPPath += "$($Server)/"
     }
     if ([String]::IsNullOrEmpty($SearchBase)) {
-        $LDAPPath += (Get-AdsiADDomain -Server $Server -Port $Port -Credential $Credential).DistinguishedName
+        $LDAPPath += (Get-AdsiADDomain).DistinguishedName
     } elseif ($SearchBase -like "LDAP://*") {
         $LDAPPath += $SearchBase -replace "LDAP://", $null
     } elseif ($SearchBase -match '(?im)^(?:(?<cn>CN=(?<name>[^,]*)),)?(?:(?<path>(?:(?:CN|OU)=[^,]+,?)+),)?(?<domain>(?:DC=[^,]+,?)+)$') {
         $LDAPPath += $SearchBase
     } else {
-        $LDAPPath += (Get-AdsiADDomain -Server $Server -Port $Port -Credential $Credential).DistinguishedName
+        $LDAPPath += (Get-AdsiADDomain).DistinguishedName
     }
+    Write-Verbose "Path: `"$LDAPPath`""
     if ($Credential -eq [PSCredential]::Empty) { 
         $searchRoot = New-Object System.DirectoryServices.DirectoryEntry $LDAPPath
     } else {
@@ -1009,7 +1007,7 @@ function Set-AdsiADUser {
         [String]$NewValue,
         
         [System.Management.Automation.PSCredential]
-        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
+        [System.Management.Automation.Credential()]$Credential = $(try {$SyncedVariables.LDAPCredential } catch {[System.Management.Automation.PSCredential]::Empty}),
 
         [String]$Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer,
 
