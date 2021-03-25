@@ -22,7 +22,7 @@
     Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v0.4.4
+    Version   : v0.4.5
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -70,7 +70,7 @@ Param(
     [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
     [String]$ExportPath
 )
-$AppVersion = "v0.4.4"
+$AppVersion = "v0.4.5"
 
 #region functions
 function New-QRTOTPImage {
@@ -779,6 +779,9 @@ function Invoke-LoadSettings {
     }
     $SyncHash.WPFControl_tbGatewayURI.Text = $SyncedVariables.Settings.GatewayURI
     $SyncHash.WPFControl_tbQRSize.Text = $SyncedVariables.Settings.QRSize
+    if ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbQRSize.Text))) { 
+        $SyncHash.WPFControl_tbQRSize.Text = "300"
+    }
     $SyncHash.WPFControl_tbLDAPServer.Text = $SyncedVariables.Settings.LDAPSettings.LDAPServer
     $SyncHash.WPFControl_tbLDAPPort.Text = $SyncedVariables.Settings.LDAPSettings.LDAPPort
     if ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbLDAPPort.Text))) { 
@@ -1692,12 +1695,26 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         }
     )
 
-    $SyncHash.WPFControl_tbDeviceName.add_TextChanged( 
-        { 
-            Write-Verbose "tbDeviceName Text Changed"
-            Update-Gui
-            Invoke-ValidateAddSecret
-            Invoke-ValidateGUIQR
+    $SyncHash.WPFControl_tbDeviceName.Add_TextChanged(
+        {
+            # tbDeviceName Text Changed Event
+            if ($this.Text -match '[^a-zA-z0-9]') {
+                Write-Verbose "tbDeviceName Text Changed, but not in range 'a-zA-z0-9'"
+                #Replace everything not in range 0-9
+                $cursorPos = $this.SelectionStart
+                $this.Text = $this.Text -replace '[^a-zA-z0-9]', $null
+                # move the cursor to the end of the text:
+                # $this.SelectionStart = $this.Text.Length
+        
+                # or leave the cursor where it was before the replace
+                $this.SelectionStart = $cursorPos - 1
+                $this.SelectionLength = 0
+            } else {
+                Write-Verbose "tbDeviceName Text Changed"
+                Update-Gui
+                Invoke-ValidateAddSecret
+                Invoke-ValidateGUIQR
+            }
         }
     )
 
@@ -1798,7 +1815,6 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                 $SyncedVariables.QRImageSource.BeginInit()
                 $SyncedVariables.QRImageSource.StreamSource = $SyncedVariables.QRImage
                 $SyncedVariables.QRImageSource.EndInit() 
-                #$SyncedVariables.QRImageSource.Freeze()
                 $SyncHash.WPFControl_ImgQR.Source = $SyncedVariables.QRImageSource
                 Show-QR
             } else {
@@ -1889,8 +1905,19 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         {
             # tbQRSize Text Changed Event
             # Only allow numbers
-            $this.Text = $this.Text -replace '\D', $null
-        })
+            if ($this.Text -match '[^0-9]') {
+                #Replace everything not in range 0-9
+                $cursorPos = $this.SelectionStart
+                $this.Text = $this.Text -replace '[^0-9]', $null
+                # move the cursor to the end of the text:
+                # $this.SelectionStart = $this.Text.Length
+        
+                # or leave the cursor where it was before the replace
+                $this.SelectionStart = $cursorPos - 1
+                $this.SelectionLength = 0
+            }
+        }
+    )
 
     #TokenText Handler
     [System.Windows.RoutedEventHandler]$Script:TokenTextCheckedEventHandler = {
@@ -1904,8 +1931,23 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         {
             # tbLDAPPort Text Changed Event
             # Only allow numbers
-            $this.Text = $this.Text -replace '\D', $null
-        })
+            if ($this.Text -match '[^0-9]') {
+                #Replace everything not in range 0-9
+                $cursorPos = $this.SelectionStart
+                $this.Text = $this.Text -replace '[^0-9]', $null
+                # move the cursor to the end of the text:
+                # $this.SelectionStart = $this.Text.Length
+        
+                # or leave the cursor where it was before the replace
+                $this.SelectionStart = $cursorPos - 1
+                $this.SelectionLength = 0
+            } elseif ([Int]$this.Text -gt 65535) {
+                $this.Text = "65535"
+                $this.SelectionStart = 5
+                $this.SelectionLength = 0
+            }
+        }
+    )
 
     $SyncHash.WPFControl_gbTokenText.AddHandler(
         [System.Windows.Controls.RadioButton]::CheckedEvent, $TokenTextCheckedEventHandler
