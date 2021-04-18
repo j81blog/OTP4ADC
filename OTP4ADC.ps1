@@ -22,7 +22,7 @@
     Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v0.4.5
+    Version   : v0.5.0
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -68,11 +68,370 @@ Param(
     [Switch]$ReplaceTokens,
     
     [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
-    [String]$ExportPath
+    [String]$ExportPath,
+
+    [Parameter(ParameterSetName = "CommandLine")]
+    [String]$Thumbprint
 )
-$AppVersion = "v0.4.5"
+$AppVersion = "v0.5.0"
 
 #region functions
+function Write-ToLogFile {
+    <#
+.SYNOPSIS
+    Write messages to a log file.
+.DESCRIPTION
+    Write info to a log file.
+.PARAMETER Message
+    The message you want to have written to the log file.
+.PARAMETER Block
+    If you have a (large) block of data you want to have written without Date/Component tags, you can specify this parameter.
+.PARAMETER E
+    Define the Message as an Error message.
+.PARAMETER W
+    Define the Message as a Warning message.
+.PARAMETER I
+    Define the Message as an Informational message.
+    Default value: This is the default value for all messages if not otherwise specified.
+.PARAMETER D
+    Define the Message as a Debug Message
+.PARAMETER Component
+    If you want to have a Component name in your log file, you can specify this parameter.
+    Default value: Name of calling script
+.PARAMETER DateFormat
+    The date/time stamp used in the LogFile.
+    Default value: "yyyy-MM-dd HH:mm:ss:ffff"
+.PARAMETER NoDate
+    If NoDate is defined, no date String will be added to the log file.
+    Default value: False
+.PARAMETER Show
+    Show the Log Entry only to console.
+.PARAMETER LogFile
+    The FileName of your log file.
+    You can also define a (Global) variable in your script $LogFile, the function will use this path instead (if not specified with the command).
+    Default value: <ScriptRoot>\Log.txt or if $PSScriptRoot is not available .\Log.txt
+.PARAMETER Delimiter
+    Define your Custom Delimiter of the log file.
+    Default value: <TAB>
+.PARAMETER LogLevel
+    The Log level you want to have specified.
+    With LogLevel: Error; Only Error (E) data will be written or shown.
+    With LogLevel: Warning; Only Error (E) and Warning (W) data will be written or shown.
+    With LogLevel: Info; Only Error (E), Warning (W) and Info (I) data will be written or shown.
+    With LogLevel: Debug; All, Error (E), Warning (W), Info (I) and Debug (D) data will be written or shown.
+    With LogLevel: None; Nothing will be written to disk or screen.
+    You can also define a (Global) variable in your script $LogLevel, the function will use this level instead (if not specified with the command)
+    Default value: Info
+.PARAMETER NoLogHeader
+    Specify parameter if you don't want the log file to start with a header.
+    Default value: False
+.PARAMETER SimpleHeader
+    Creates a csv alike log file (may not me csv compatible).
+    "Default" header will not be written, -NoLogHeader parameter will be ignored.
+.PARAMETER WriteHeader
+    Only Write header with info to the log file.
+.PARAMETER ExtraHeaderInfo
+    Specify a String with info you want to add to the log header.
+.PARAMETER NewLog
+    Force to start a new log, previous log will be removed.
+.EXAMPLE
+    Write-ToLogFile "This message will be written to a log file"
+    To write a message to a log file just specify the following command, it will be a default informational message.
+.EXAMPLE
+    Write-ToLogFile -E "This message will be written to a log file"
+    To write a message to a log file just specify the following command, it will be a error message type.
+.EXAMPLE
+    Write-ToLogFile "This message will be written to a log file" -NewLog
+    To start a new log file (previous log file will be removed)
+.EXAMPLE
+    Write-ToLogFile "This message will be written to a log file"
+    If you have the variable $LogFile defined in your script, the Write-ToLogFile function will use that LofFile path to write to.
+    E.g. $LogFile = "C:\Path\LogFile.txt"
+.NOTES
+    Function Name : Write-ToLogFile
+    Version       : v0.2.8
+    Author        : John Billekens
+    Requires      : PowerShell v5.1 and up
+.LINK
+    https://blog.j81.nl
+#>
+    #requires -version 5.1
+
+    [CmdletBinding(DefaultParameterSetName = "Info")]
+    Param
+    (
+        [Parameter(ParameterSetName = "Error", ValueFromPipeline, Mandatory = $true, Position = 0)]
+        [Parameter(ParameterSetName = "Warning", ValueFromPipeline, Mandatory = $true, Position = 0)]
+        [Parameter(ParameterSetName = "Info", ValueFromPipeline, Mandatory = $true, Position = 0)]
+        [Parameter(ParameterSetName = "Debug", ValueFromPipeline, Mandatory = $true, Position = 0)]
+        [ValidateNotNullOrEmpty()]
+        [Alias("M")]
+        [String[]]$Message,
+
+        [Parameter(ParameterSetName = "Block", Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [Alias("B")]
+        [object[]]$Block,
+
+        [Parameter(ParameterSetName = "Block", Mandatory = $false)]
+        [Alias("BI")]
+        [Switch]$BlockIndent,
+
+        [Parameter(ParameterSetName = "Error")]
+        [Switch]$E,
+
+        [Parameter(ParameterSetName = "Warning")]
+        [Switch]$W,
+
+        [Parameter(ParameterSetName = "Info")]
+        [Switch]$I,
+
+        [Parameter(ParameterSetName = "Debug")]
+        [Switch]$D,
+
+        [Parameter(ParameterSetName = "Error")]
+        [Parameter(ParameterSetName = "Warning")]
+        [Parameter(ParameterSetName = "Info")]
+        [Parameter(ParameterSetName = "Debug")]
+        [Alias("C")]
+        [String]$Component = $(try { $(Split-Path -Path $($MyInvocation.ScriptName) -Leaf -ErrorAction Stop) } catch { "LOG" }),
+
+        [Parameter(ParameterSetName = "Error")]
+        [Parameter(ParameterSetName = "Warning")]
+        [Parameter(ParameterSetName = "Info")]
+        [Parameter(ParameterSetName = "Debug")]
+        [Alias("ND")]
+        [Switch]$NoDate,
+
+        [Parameter(ParameterSetName = "Error")]
+        [Parameter(ParameterSetName = "Warning")]
+        [Parameter(ParameterSetName = "Info")]
+        [Parameter(ParameterSetName = "Debug")]
+        [ValidateNotNullOrEmpty()]
+        [Alias("DF")]
+        [String]$DateFormat = "yyyy-MM-dd HH:mm:ss:ffff",
+
+        [Parameter(ParameterSetName = "Error")]
+        [Parameter(ParameterSetName = "Warning")]
+        [Parameter(ParameterSetName = "Info")]
+        [Parameter(ParameterSetName = "Debug")]
+        [Parameter(ParameterSetName = "Block")]
+        [Alias("S")]
+        [Switch]$Show,
+
+        [String]$LogFile,
+
+        [Parameter(ParameterSetName = "Error")]
+        [Parameter(ParameterSetName = "Warning")]
+        [Parameter(ParameterSetName = "Info")]
+        [Parameter(ParameterSetName = "Debug")]
+        [String]$Delimiter = "`t",
+
+        [Parameter(ParameterSetName = "Error")]
+        [Parameter(ParameterSetName = "Warning")]
+        [Parameter(ParameterSetName = "Info")]
+        [Parameter(ParameterSetName = "Debug")]
+        [ValidateSet("Error", "Warning", "Info", "Debug", "None", IgnoreCase = $true)]
+        [String]$LogLevel = $Script:LogLevel,
+
+        [Parameter(ParameterSetName = "Error")]
+        [Parameter(ParameterSetName = "Warning")]
+        [Parameter(ParameterSetName = "Info")]
+        [Parameter(ParameterSetName = "Debug")]
+        [Parameter(ParameterSetName = "Block")]
+        [Alias("NH", "NoHead")]
+        [Switch]$NoLogHeader,
+
+        [Parameter(ParameterSetName = "Error")]
+        [Parameter(ParameterSetName = "Warning")]
+        [Parameter(ParameterSetName = "Info")]
+        [Parameter(ParameterSetName = "Debug")]
+        [Parameter(ParameterSetName = "Block")]
+        [Alias("SH")]
+        [Switch]$SimpleHeader,
+        
+        [Parameter(ParameterSetName = "Head")]
+        [Alias("H", "Head")]
+        [Switch]$WriteHeader,
+
+        [Alias("HI")]
+        [String]$ExtraHeaderInfo = $null,
+
+        [Alias("NL")]
+        [Switch]$NewLog
+    )
+    begin {
+        #Determine root path
+        $RootPath = $(if ($psISE) { Split-Path -Path $psISE.CurrentFile.FullPath } else { $(if ($Script:PSScriptRoot.Length -gt 0) { $Script:PSScriptRoot } else { $Script:pwd.Path }) })
+        # Set Message Type to Informational if nothing is defined.
+        if ((-Not $I) -and (-Not $W) -and (-Not $E) -and (-Not $D) -and (-Not $Block) -and (-Not $WriteHeader)) {
+            $I = $true
+        }
+        #Check if a log file is defined in a Script. If defined, get value.
+        try {
+            $LogFileVar = Get-Variable -Scope Script -Name LogFile -ValueOnly -ErrorAction Stop
+            if (-Not [String]::IsNullOrWhiteSpace($LogFileVar)) {
+                $LogFile = $LogFileVar
+            } 
+        } catch {
+            #Continue, no script variable found for LogFile
+        }
+        #Check if a LogLevel is defined in a script. If defined, get value.
+        try {
+            if ([String]::IsNullOrEmpty($LogLevel) -and (-Not $Block) -and (-Not $WriteHeader)) {
+                $LogLevelVar = try { Get-Variable -Scope Script -Name LogLevel -ValueOnly -ErrorAction Stop } catch { $null }
+                $LogLevel = $LogLevelVar
+            }
+        } catch { 
+            if ([String]::IsNullOrEmpty($LogLevel) -and (-Not $Block)) {
+                $LogLevel = "Info"
+            }
+        }
+        if (-Not ($LogLevel.ToLower() -eq "none")) {
+            #Check if LogFile parameter is empty
+            if ([String]::IsNullOrWhiteSpace($LogFile)) {
+                if (-Not $Show) {
+                    Write-Warning "Messages not written to log file, LogFile path is empty!"
+                }
+                #Only Show Entries to Console
+                $Show = $true
+            } else {
+                #If Not Run in a Script "$PSScriptRoot" wil only contain "\" this will be changed to the current directory
+                $ParentPath = Split-Path -Path $LogFile -Parent -ErrorAction SilentlyContinue
+                if (([String]::IsNullOrEmpty($ParentPath)) -or ($ParentPath -eq "\") -or ($ParentPath -eq ".")) {
+                    $LogFile = $(Join-Path -Path (Split-Path $script:MyInvocation.MyCommand.Path) -ChildPath $(Split-Path -Path $LogFile -Leaf))
+                }
+
+            }
+            Write-Debug -Message "LogFile: $LogFile"
+            #Define Log Header
+            if (-Not $Show) {
+                if ($SimpleHeader -and (-Not (Test-Path -Path $LogFile -ErrorAction SilentlyContinue))) {
+                    $LogHeader = "DateTime{0}LogType{0}Component{0}Message`r`n" -f $Delimiter
+                    Write-Debug -Message "A simple header was requested."
+                } elseif (
+                    (-Not $NoLogHeader -and (-Not (Test-Path -Path $LogFile -ErrorAction SilentlyContinue))) -or 
+                    (-Not $NoLogHeader -and ($NewLog)) -or
+                    ($WriteHeader)) {
+                    $LogHeader = @"
+**********************
+LogFile: $LogFile
+Start time: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+Username: $([Security.Principal.WindowsIdentity]::GetCurrent().Name)
+RunAs Admin: $((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
+Machine: $($Env:COMPUTERNAME) ($([System.Environment]::OSVersion.VersionString))
+PSCulture: $($PSCulture)
+PSVersion: $($PSVersionTable.PSVersion)
+PSEdition: $($PSVersionTable.PSEdition)
+PSCompatibleVersions: $($PSVersionTable.PSCompatibleVersions -join ', ')
+BuildVersion: $($PSVersionTable.BuildVersion)
+PSCommandPath: $($PSCommandPath)
+LanguageMode: $($ExecutionContext.SessionState.LanguageMode)
+"@
+                    if (-Not [String]::IsNullOrEmpty($ExtraHeaderInfo)) {
+                        $LogHeader += "`r`n"
+                        $LogHeader += $ExtraHeaderInfo.TrimEnd("`r`n")
+                    }
+                    $LogHeader += "`r`n**********************`r`n"
+
+                } else {
+                    $LogHeader = $null
+                }
+            }
+        } else {
+            Write-Debug -Message "LogLevel is set to None!"
+        }
+        #Define date String to start log message with. If NoDate is defined no date String will be added to the log file.
+        if (-Not ($LogLevel.ToLower() -eq "none")) {
+            if (-Not ($NoDate) -and (-Not $Block) -and (-Not $WriteHeader)) {
+                $DateString = "{0}{1}" -f $(Get-Date -Format $DateFormat), $Delimiter
+            } else {
+                $DateString = $null
+            }
+            if (-Not [String]::IsNullOrEmpty($Component) -and (-Not $Block) -and (-Not $WriteHeader)) {
+                $Component = "{0}{1}{0}" -f $Delimiter, $Component.ToUpper()
+            } else {
+                $Component = "{0}{0}" -f $Delimiter
+            }
+            #Define the log sting for the Message Type
+            if ($Block -or $WriteHeader) {
+                $WriteLog = $true
+            } elseif ($E -and (($LogLevel.ToLower() -eq "error") -or ($LogLevel.ToLower() -eq "waring") -or ($LogLevel.ToLower() -eq "info") -or ($LogLevel.ToLower() -eq "debug"))) {
+                Write-Debug -Message "LogType: [Error], LogLevel: [$LogLevel]"
+                $MessageType = "ERROR"
+                $WriteLog = $true
+            } elseif ($W -and (($LogLevel.ToLower() -eq "waring") -or ($LogLevel.ToLower() -eq "info") -or ($LogLevel.ToLower() -eq "debug"))) {
+                Write-Debug -Message "LogType: [Warning], LogLevel: [$LogLevel]"
+                $MessageType = "WARNING"
+                $WriteLog = $true
+            } elseif ($I -and (($LogLevel.ToLower() -eq "info") -or ($LogLevel.ToLower() -eq "debug"))) {
+                Write-Debug -Message "LogType: [Info], LogLevel: [$LogLevel]"
+                $MessageType = "INFO"
+                $WriteLog = $true
+            } elseif ($D -and (($LogLevel.ToLower() -eq "debug"))) {
+                Write-Debug -Message "LogType: [Debug], LogLevel: [$LogLevel]"
+                $MessageType = "DEBUG"
+                $WriteLog = $true
+            } else {
+                Write-Debug -Message "No Log entry is made, LogType: [Error: $E, Warning: $W, Info: $I, Debug: $D] LogLevel: [$LogLevel]"
+                $WriteLog = $false
+            }
+        } else {
+            $WriteLog = $false
+        }
+    } process {
+
+    } end {
+        #Write the line(s) of text to a file.
+        if ($WriteLog) {
+            if ($WriteHeader) {
+                $LogString = $LogHeader
+            } elseif ($Block) {
+                if ($BlockIndent) {
+                    $BlockLineStart = "{0}{0}{0}" -f $Delimiter
+                } else {
+                    $BlockLineStart = ""
+                }
+                if ($Block -is [System.String]) {
+                    $LogString = "{0]{1}" -f $BlockLineStart, $Block.Replace("`r`n", "`r`n$BlockLineStart")
+                } else {
+                    $LogString = "{0}{1}" -f $BlockLineStart, $($Block | Out-String).Replace("`r`n", "`r`n$BlockLineStart")
+                }
+                $LogString = "$($LogString.TrimEnd("$BlockLineStart").TrimEnd("`r`n"))`r`n"
+            } else {
+                $LogString = "{0}{1}{2}{3}" -f $DateString, $MessageType, $Component, $($Message | Out-String)
+            }
+            if ($Show) {
+                "$($LogString.TrimEnd("`r`n"))"
+                Write-Debug -Message "Data shown in console, not written to file!"
+
+            } else {
+                if (($LogHeader) -and (-Not $WriteHeader)) {
+                    $LogString = "{0}{1}" -f $LogHeader, $LogString
+                }
+                try {
+                    if ($NewLog) {
+                        try {
+                            Remove-Item -Path $LogFile -Force -ErrorAction Stop
+                            Write-Debug -Message "Old log file removed"
+                        } catch {
+                            Write-Debug -Message "Could not remove old log file, trying to append"
+                        }
+                    }
+                    [System.IO.File]::AppendAllText($LogFile, $LogString, [System.Text.Encoding]::Unicode)
+                    Write-Debug -Message "Data written to LogFile:`r`n         `"$LogFile`""
+                } catch {
+                    #If file cannot be written, give an error
+                    Write-Error -Category WriteError -Message "Could not write to file `"$LogFile`""
+                }
+                Write-Verbose "$MessageType`t$(($Message | Out-String).Trim())"
+            }
+        } else {
+            Write-Debug -Message "Data not written to file!"
+        }
+    }
+}
+
 function New-QRTOTPImage {
     <#
         .SYNOPSIS
@@ -157,7 +516,7 @@ $($URI.AbsoluteUri)
     if ($OutStream) { return $MemoryStream }
 }
 
-<#
+<# ToDo Remove / clean code
 function Get-OTPSecret {
     [cmdletbinding()]
     param(
@@ -203,6 +562,7 @@ function Get-OTPSecret {
         $Bytes = $Bytes + "0"    
     }
     for ($i = 0; $i -lt $Bytes.Length / 5; $i++) {
+        
         $Base32Secret = "$Base32Secret$($Base32Chars[$([convert]::ToInt32($($Bytes.Substring($i*5, 5)),2))])"
     }
     Write-Verbose "Ending function   : Get-OTPSecret"
@@ -279,7 +639,28 @@ function Save-File {
     )
     Write-Verbose "Starting function : Save-File"
     [System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null
-    $OpenFileDialog = New-Object System.Windows.Forms.SaveFileDialog
+    $SaveFileDialog = New-Object System.Windows.Forms.SaveFileDialog
+    $SaveFileDialog.initialDirectory = $InitialDirectory
+    if (-Not [String]::IsNullOrEmpty($FileName)) {
+        $SaveFileDialog.FileName = $FileName
+    }
+    $SaveFileDialog.filter = $Filter
+    $SaveFileDialog.ShowDialog() | Out-Null
+    Write-Verbose "FilePath: `"$($SaveFileDialog.filename)`""
+    Write-Verbose "Ending function   : Save-File"
+    return $SaveFileDialog.filename
+} 
+
+function Open-File {
+    [CmdletBinding()]
+    Param(
+        [string]$InitialDirectory = $([System.Environment]::GetFolderPath("mydocuments")),
+        
+        [String]$Filter = "All files (*.*)| *.*"
+    )
+    Write-Verbose "Starting function : Open-File"
+    [System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null
+    $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog
     $OpenFileDialog.initialDirectory = $InitialDirectory
     if (-Not [String]::IsNullOrEmpty($FileName)) {
         $OpenFileDialog.FileName = $FileName
@@ -287,27 +668,9 @@ function Save-File {
     $OpenFileDialog.filter = $Filter
     $OpenFileDialog.ShowDialog() | Out-Null
     Write-Verbose "FilePath: `"$($OpenFileDialog.filename)`""
-    Write-Verbose "Ending function   : Save-File"
+    Write-Verbose "Ending function   : Open-File"
     return $OpenFileDialog.filename
 } 
-
-function ConvertFrom-Attribute {
-    [CmdLetBinding()]
-    [OutputType('PSCustomObject')]
-    param(
-        [String]$Data
-    )
-    Write-Verbose "Starting function : ConvertFrom-Attribute"
-
-    if ($Data.Length -gt 2) {
-        $Result = $Data.Substring(2).Split(',') | ForEach-Object { [PSCustomObject]@{
-                DeviceName = $($_.Split('=')[0])
-                Secret     = $(($_.Replace('&', '').Split('=')[1]))
-            } } | Where-Object { $_.Secret } | Sort-Object DeviceName
-    }
-    Write-Verbose "Ending function   : ConvertFrom-Attribute"
-    return $Result | Sort-Object DeviceName
-}
 
 function Initialize-GUI {
     Write-Verbose "Starting function : Initialize-GUI"
@@ -327,24 +690,22 @@ function Update-Gui {
     Write-Verbose "Ending function   : Update-Gui"
 }
 
-function Invoke-CleanGUIQRImage {
-    Write-Verbose "Starting function : Invoke-CleanGUIQRImage"
+function Reset-GUIQRImage {
+    Write-Verbose "Starting function : Reset-GUIQRImage"
     $SyncHash.WPFControl_btnGenerateQR.Content = "Generate QR"
     if ($SyncHash.WPFControl_btnGenerateQR.IsEnabled) { $SyncHash.WPFControl_btnGenerateQR.IsEnabled = $false }
     if ($SyncHash.WPFControl_btnExportQR.IsEnabled) { $SyncHash.WPFControl_btnExportQR.IsEnabled = $false }
     $SyncHash.WPFControl_ImgQR.Source = $null
     $SyncHash.WPFControl_lbTokenUserText.Content = ""
-    #$SyncHash.WPFControl_ImgQR.Visibility = [System.Windows.Visibility]::Hidden
     if ($SyncedVariables.QRGenerationPossible) { $SyncHash.WPFControl_lblQR.Content = "" }
     $SyncedVariables.QRImage = $null
     Invoke-ValidateGUIQR
     Invoke-ValidateAddSecret
-    Write-Verbose "Ending function   : Invoke-CleanGUIQRImage"
+    Write-Verbose "Ending function   : Reset-GUIQRImage"
 }
 
 function Get-GUIQRImage {
     Write-Verbose "Starting function : Get-GUIQRImage"
-    #Invoke-CleanGUIQRImage
     if ($SyncHash.WPFControl_btnGenerateQR.IsEnabled) { $SyncHash.WPFControl_btnGenerateQR.IsEnabled = $false }
     $SyncHash.WPFControl_btnGenerateQR.Content = "Generating QR..."
     $SyncHash.WPFControl_lblQR.Content = "Loading QR..."
@@ -353,7 +714,6 @@ function Get-GUIQRImage {
 
 function Show-QR {
     Write-Verbose "Starting function : Show-QR"
-    #$SyncHash.WPFControl_ImgQR.Visibility = [System.Windows.Visibility]::Visible
     $SyncHash.WPFControl_lblQR.Content = ""
     if (-Not $SyncHash.WPFControl_btnExportQR.IsEnabled) { $SyncHash.WPFControl_btnExportQR.IsEnabled = $true }
     $SyncHash.WPFControl_btnExportQR.Focus() | Out-Null
@@ -367,21 +727,25 @@ function Search-User {
     param(
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
-        [String]$Name
+        [String]$Name,
+
+        [String[]]$Attributes = $SyncedVariables.Attribute
     )
-    Write-Verbose "Starting function : Search-User"
+    Write-Verbose "Starting function : Search-User [User:$Name Attribute:$Attributes]"
     try {
-        if ($Script:AlternativeLDAPModule) {
+        if ($Script:LDAPNativeFunctions) {
             $Params = @{
-                Attributes = @($SyncedVariables.Attribute)
+                Attributes = @($Attributes)
                 Name       = $Name
             }
+            Write-Verbose "Params:$($Params | Out-String)"
             $ADUsers = Get-AdsiADUser @Params
         } else { 
             $Params = @{
-                Properties = @($SyncedVariables.Attribute)
+                Properties = @($Attributes)
                 LDAPFilter = "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))"
             }
+            Write-Verbose "Params:$($Params | Out-String)"
             if (-Not ($null -eq $SyncedVariables.LDAPCredential -or $SyncedVariables.LDAPCredential -eq [PSCredential]::Empty)) {
                 $Params.Credential = $SyncedVariables.LDAPCredential
             }
@@ -390,23 +754,29 @@ function Search-User {
             }
             $ADUsers = Get-ADUser @Params
         }
-       
+        Write-Verbose "ADUsers:$($ADUsers | Out-String)"
         $Results = $ADUsers | ForEach-Object {
-            $Username = $_.SamAccountName
-            if ($Script:AlternativeLDAPModule) {
-                $Surname = $_.sn
+            $ADUser = $_
+            $Username = $ADUser.SamAccountName
+            if ($Script:LDAPNativeFunctions) {
+                $Surname = $ADUser.sn
             } else {
-                $Surname = $_.Surname
+                $Surname = $ADUser.Surname
             }
-            [PSCustomObject]@{
-                SamAccountName    = $Username
-                GivenName         = $_.GivenName
-                Surname           = $Surname
-                Name              = $_.Name
-                Attribute         = $_."$($SyncedVariables.Attribute)"
-                DistinguishedName = $_.DistinguishedName
-                UserPrincipalName = $_.UserPrincipalName
-            } }
+            
+            $User = [PSCustomObject]::new()
+            $User | Add-Member -MemberType NoteProperty -Name SamAccountName -Value $Username
+            $User | Add-Member -MemberType NoteProperty -Name GivenName -Value $ADUser.GivenName
+            $User | Add-Member -MemberType NoteProperty -Name Surname -Value $Surname
+            $User | Add-Member -MemberType NoteProperty -Name Name -Value $ADUser.Name
+            $User | Add-Member -MemberType NoteProperty -Name DistinguishedName -Value $ADUser.DistinguishedName
+            $User | Add-Member -MemberType NoteProperty -Name UserPrincipalName -Value $ADUser.UserPrincipalName
+            $Attributes | ForEach-Object {
+                $User | Add-Member -MemberType NoteProperty -Name $_ -Value $ADUser."$_"
+            }
+            $User | Add-Member -MemberType NoteProperty -Name Attribute -Value $ADUser."$($SyncedVariables.Attribute)"
+            Write-Output $User
+        }
     } catch {
         Write-Verbose "Caught an error, $($_.Exception.Message)"
         $null = [System.Windows.MessageBox]::Show("$($_.Exception.Message)", "Error!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
@@ -415,8 +785,8 @@ function Search-User {
     return $Results 
 }
 
-function Invoke-CleanGUIUser {
-    Write-Verbose "Starting function : Invoke-CleanGUIUser"
+function Reset-GUIUser {
+    Write-Verbose "Starting function : Reset-GUIUser"
     if (-Not $SyncedVariables.CleanGUIUser) {
         if ($SyncedVariables.Saved) {
             $Continue = $true
@@ -439,19 +809,105 @@ function Invoke-CleanGUIUser {
             $SyncedVariables.Saved = $true
             $SyncedVariables.DeviceSecrets = @()
             $SyncedVariables.OTPDevices = @()
-            Invoke-CleanGUIQR
-            Invoke-CleanOTPToken
-            Invoke-UpdateTokenText
+            Reset-GUIQR
+            Reset-GUIOTPToken
+            Update-GUITokenText
         }
         $SyncedVariables.CleanGUIUser = $true
     } else {
-        Write-Verbose "Invoke-CleanGUIUser, nothing to do."
+        Write-Verbose "Reset-GUIUser, nothing to do."
     }
-    Write-Verbose "Ending function   : Invoke-CleanGUIUser"
+    Write-Verbose "Ending function   : Reset-GUIUser"
 }
 
-function Invoke-CleanOTPToken {
-    Write-Verbose "Starting function : Invoke-CleanOTPToken"
+function Reset-GUIEncryption {
+    Write-Verbose "Starting function : Reset-GUIEncryption"
+    Test-GUIPoSHForEncryption
+    $SyncHash.WPFControl_rbEncryptionOperation0.IsChecked = $true
+    $SyncHash.WPFControl_rbEncryptionOption0.IsChecked = $true
+    $SyncedVariables.EncryptionOperation = "0"
+    $SyncedVariables.EncryptionOption = "0"
+    $SyncHash.WPFControl_tbCurrentAttribute.Text = $SyncedVariables.Attribute
+    $SyncHash.WPFControl_tbNewAttribute.Text = ""
+    $SyncHash.WPFControl_tbCurrentCertificateThumbprint.Text = ""
+    $SyncHash.WPFControl_tbNewCertificateThumbprint.Text = ""
+    $SyncHash.WPFControl_pbConversionStatus.Value = 0
+    $SyncHash.WPFControl_tbConversionStatus.Text = "0% | Success:0 | Failed:0"
+    Write-Verbose "Ending function   : Reset-GUIEncryption"
+}
+
+function Set-GUIEncryptionOperation {
+    [CmdLetBinding()]
+    param(
+        [Parameter(Position = 0, Mandatory)]
+        [String]$Operation
+    )
+    Write-Verbose "Starting function : Set-GUIEncryptionOperation [Operation: $Operation]"
+    switch ($Operation) {
+        "0" {
+            if ($SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled -eq $true) {
+                $SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled = $false
+            }
+            $SyncHash.WPFControl_tbCurrentCertificateThumbprint.Text = ""
+            if ($SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled -eq $false) {
+                $SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled = $true 
+            }
+            Break
+        }
+        "1" {
+            if ($SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled -eq $false) {
+                $SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled = $true
+            }
+            $SyncHash.WPFControl_tbCurrentCertificateThumbprint.Text = $SyncedVariables.Settings.LDAPSettings.EncryptionCertificateThumbprint
+            if ($SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled -eq $true) {
+                $SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled = $false
+            }
+            $SyncHash.WPFControl_tbNewCertificateThumbprint.Text = ""
+            Break
+        }
+        "2" {
+            if ($SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled -eq $false) {
+                $SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled = $true
+            }
+            if ($SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled -eq $false) {
+                $SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled = $true 
+            }
+            Break
+        }
+        Default {
+            Break
+        }
+    }
+    Write-Verbose "Ending function   : Set-GUIEncryptionOperation"
+}
+
+function Set-GUIEncryptionOption {
+    [CmdLetBinding()]
+    param(
+        [Parameter(Position = 0, Mandatory)]
+        [String]$Option
+    )
+    Write-Verbose "Starting function : Set-GUIEncryptionOption [Option: $Option]"
+    switch ($Option) {
+        "0" {
+            if ($SyncHash.WPFControl_tbNewAttribute.IsEnabled -eq $true) { $SyncHash.WPFControl_tbNewAttribute.IsEnabled = $false }
+            $SyncHash.WPFControl_tbNewAttribute.Text = ""
+            $Scr
+            Break
+        }
+        "1" {
+            if ($SyncHash.WPFControl_tbNewAttribute.IsEnabled -eq $false) { $SyncHash.WPFControl_tbNewAttribute.IsEnabled = $true }
+            Break
+        }
+        Default {
+            Break
+        }
+    }
+    Write-Verbose "Ending function   : Set-GUIEncryptionOption"
+}
+
+function Reset-GUIOTPToken {
+    Write-Verbose "Starting function : Reset-GUIOTPToken"
     $SyncedVariables.OTPUpdate = $False
     $SyncedVariables.OTPToken = $null
     try { $PoSH.EndInvoke($SyncedVariables.handle) } catch { }
@@ -459,24 +915,25 @@ function Invoke-CleanOTPToken {
     if ($SyncHash.WPFControl_btnViewTOTPToken.IsEnabled) { $SyncHash.WPFControl_btnViewTOTPToken.IsEnabled = $false }
     $SyncHash.WPFControl_tbTOTPToken.Text = "------"
     $SyncHash.WPFControl_pbTOTPToken.Value = 0
-    Write-Verbose "Ending function   : Invoke-CleanOTPToken"
+    Write-Verbose "Ending function   : Reset-GUIOTPToken"
 }
 
-function Invoke-CleanGUIQR {
-    Write-Verbose "Starting function : Invoke-CleanGUIQR"
+function Reset-GUIQR {
+    Write-Verbose "Starting function : Reset-GUIQR"
     $SyncHash.WPFControl_tbSecret.Text = ""
     $SyncHash.WPFControl_tbDeviceName.Text = ""
     $SyncHash.WPFControl_tbGateway.Text = $GatewayURI
     if ($SyncHash.WPFControl_btnAddQR.IsEnabled) { $SyncHash.WPFControl_btnAddQR.IsEnabled = $false }
-    Invoke-CleanGUIQRImage
-    Write-Verbose "Ending function   : Invoke-CleanGUIQR"
+    Reset-GUIQRImage
+    Write-Verbose "Ending function   : Reset-GUIQR"
 }
 
 function Reset-GUIForm {
     [CmdLetBinding()]
     param()
     Write-Verbose "Starting function : Reset-GUIForm"
-    Invoke-CleanGUIUser
+    Reset-GUIUser
+    Reset-GUIEncryption
     $SyncHash.WPFControl_tbUsername.Focus() | Out-Null
     Write-Verbose "Ending function   : Reset-GUIForm"
 }
@@ -487,14 +944,16 @@ function Save-OtpToUser {
     $DistinguishedName = $SelectedUser.DistinguishedName
     try {
         if ($SyncedVariables.DeviceSecrets.Count -gt 0) {
-            $NewOTP = @()
-            ForEach ($Item in $SyncedVariables.DeviceSecrets) {
-                $NewOTP += "{0}={1}" -f $Item.DeviceName, $Item.Secret
+            if ($SyncedVariables.Settings.LDAPSettings.EncryptionEnabled) {
+                Write-Verbose "Converting to an encrypted attribute"
+                $NewOTPString = ConvertTo-EncryptedUserAttribute -object $SyncedVariables.DeviceSecrets -Thumbprint $SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint
+            } else {
+                Write-Verbose "Converting to a cleartext attribute"
+                $NewOTPString = ConvertTo-ClearTextUserAttribute -object $SyncedVariables.DeviceSecrets
             }
-            $NewOTPString = "#@$($NewOTP -Join '&,')&,"
+
             Write-Verbose "New OTP AD User String: `"$NewOTPString`""
-            #$SyncedVariables.DeviceName = $SyncHash.WPFControl_tbDeviceName.text
-            if ($Script:AlternativeLDAPModule) {
+            if ($Script:LDAPNativeFunctions) {
                 $Params = @{
                     DistinguishedName = $DistinguishedName
                     Attribute         = $SyncedVariables.Attribute
@@ -517,7 +976,7 @@ function Save-OtpToUser {
         } else {
             Write-Verbose "No OTP for user, save empty string"
             $NewOTPString = $null
-            if ($Script:AlternativeLDAPModule) {
+            if ($Script:LDAPNativeFunctions) {
                 $Params = @{
                     DistinguishedName = $DistinguishedName
                     Attribute         = $SyncedVariables.Attribute
@@ -550,18 +1009,19 @@ function Save-OtpToUserExportCommand {
     $SelectedUser = $SyncHash.WPFControl_lvUsernames.SelectedItem
     $DistinguishedName = $SelectedUser.DistinguishedName
     if ($SyncedVariables.DeviceSecrets.Count -gt 0) {
-        $NewOTP = @()
-        ForEach ($Item in $SyncedVariables.DeviceSecrets) {
-            $NewOTP += "{0}={1}" -f $Item.DeviceName, $Item.Secret
+        if ($SyncedVariables.Settings.LDAPSettings.EncryptionEnabled) {
+            Write-Verbose "Converting to an encrypted attribute"
+            $NewOTPString = ConvertTo-EncryptedUserAttribute -object $SyncedVariables.DeviceSecrets -Thumbprint $SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint
+        } else {
+            Write-Verbose "Converting to a cleartext attribute"
+            $NewOTPString = ConvertTo-ClearTextUserAttribute -object $SyncedVariables.DeviceSecrets
         }
-        $NewOTPString = "#@$($NewOTP -Join '&,')&,"
         Write-Verbose "New OTP AD User String: `"$NewOTPString`""
-        #$SyncedVariables.DeviceName = $SyncHash.WPFControl_tbDeviceName.text
-        $ExportPoSHCommand = 'Set-ADUser -Identity "{0}" -Replace @{{ "{1}" = "{2}" }}' -f $DistinguishedName, $SyncedVariables.Attribute, $NewOTPString
+        $ExportPoSHCommand = "Set-ADUser -Identity '{0}' -Replace @{{ '{1}' = '{2}' }}" -f $DistinguishedName, $SyncedVariables.Attribute, $NewOTPString
     } else {
         Write-Verbose "No OTP for user, save empty string"
         $NewOTPString = $null
-        $ExportPoSHCommand = 'Set-ADUser -Identity "{0}" -Clear @("{1}")' -f $DistinguishedName, $SyncedVariables.Attribute
+        $ExportPoSHCommand = "Set-ADUser -Identity '{0}' -Clear @('{1}')" -f $DistinguishedName, $SyncedVariables.Attribute
     }
     $ExportPoSHCommand | clip.exe
     $result = [System.Windows.MessageBox]::Show("The PowerShell command to make the necessary changes was copied to the clipboard.`nClean the current screen? Changes are not saved to the selected user unless you run the copied command!", "PowerShell Command", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
@@ -574,8 +1034,8 @@ function Save-OtpToUserExportCommand {
     Write-Verbose "Ending function   : Save-OtpToUserExportCommand"
 }
 
-function Invoke-UpdateTokenText {
-    Write-Verbose "Starting function : Invoke-UpdateTokenText"
+function Update-GUITokenText {
+    Write-Verbose "Starting function : Update-GUITokenText"
     $SelectedItem = $SyncHash.WPFControl_lvUsernames.SelectedItem
     $GatewayURI = $SyncHash.WPFControl_tbGateway.Text
     $UserPrincipalName = $SelectedItem.UserPrincipalName
@@ -597,7 +1057,6 @@ function Invoke-UpdateTokenText {
     $SyncHash.WPFControl_rbTokenTextOption1.Content = '[1] {0}' -f $NewTokenTextOption1
     $SyncHash.WPFControl_rbTokenTextOption2.Content = '[2] {0}' -f $NewTokenTextOption2
     $SyncHash.WPFControl_rbTokenTextOption3.Content = '[3] {0}' -f $NewTokenTextOption3
-    # "TokenText: $($SyncedVariables.TokenText)"
     switch ($SyncedVariables.TokenText) {
         "1" {
             # "(1) username@domain.com"
@@ -620,7 +1079,7 @@ function Invoke-UpdateTokenText {
             Break
         }
     }
-    Write-Verbose "Ending function   : Invoke-UpdateTokenText"
+    Write-Verbose "Ending function   : Update-GUITokenText"
 }
 function Invoke-ValidateGUIQR {
     Write-Verbose "Starting function : Invoke-ValidateGUIQR"
@@ -658,24 +1117,24 @@ function Invoke-SearchADUser {
     Write-Verbose "Ending function   : Invoke-SearchADUser"
 }
 
-function Start-App {
+function Invoke-ApplicationBasics {
     if (-Not $Script:AppStarted) {
-        Write-Verbose "Starting function : Start-App"
+        Write-Verbose "Starting function : Invoke-ApplicationBasics"
         try {
-            Invoke-LoadModules
-            Invoke-LoadAppImage
+            Import-ModulesGUI
+            Import-GUIAppImage
             Initialize-GUI
             $Script:AppStarted = $true
         } catch { "ERROR: $($_.Exception.Message)" }
-        Write-Verbose "Ending function   : Start-App"
+        Write-Verbose "Ending function   : Invoke-ApplicationBasics"
     } else {
-        Write-Verbose "Function: Start-App, app has focus."
+        Write-Verbose "Function: Invoke-ApplicationBasics, app has focus."
     }
 }
 
-function Invoke-LoadQRModule {
+function Import-QRModule {
     # Source for this code: https://github.com/TobiasPSP/Modules.QRCodeGenerator 
-    Write-Verbose "Starting function : Invoke-LoadQRModule, Loading QR Imaging Module"
+    Write-Verbose "Starting function : Import-QRModule, Loading QR Imaging Module"
     try {
         # Version: 2.4.1
         # loading binaries from string
@@ -688,12 +1147,12 @@ function Invoke-LoadQRModule {
         #$SyncHash.WPFControl_lblQR.Content = "NOT AVAILABLE!"
         $null = [System.Windows.MessageBox]::Show("Could not load the `"QRCodeGenerator`"!`nQR Code generation is disabled.", "QRCodeGenerator Failed", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Exclamation)
     }
-    Write-Verbose "Ending function   : Invoke-LoadQRModule"
+    Write-Verbose "Ending function   : Import-QRModule"
 }
 
-function Invoke-LoadModules {
+function Import-ModulesGUI {
     Write-Verbose "Starting function : Get-AdsiADDomain"
-    if ($Script:AlternativeLDAPModule) {
+    if ($Script:LDAPNativeFunctions) {
         try {
             Write-Verbose "Using Alternative AD Modules"
             if ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbLDAPServer.Text))) {
@@ -708,10 +1167,10 @@ function Invoke-LoadModules {
             }
             if ($SyncHash.WPFControl_gbUser.IsEnabled -eq $false) { $SyncHash.WPFControl_gbUser.IsEnabled = $true }
         } catch {
-            $SyncHash.WPFControl_tbUsername.Text = "Error while loading Alternative AD Option!"
+            $SyncHash.WPFControl_tbUsername.Text = "Error while loading Native AD Option!"
             Write-Verbose "ERROR: $($_.Exception.Message)"
             if ($SyncHash.WPFControl_gbUser.IsEnabled) { $SyncHash.WPFControl_gbUser.IsEnabled = $false }
-            $null = [System.Windows.MessageBox]::Show("Error while loading Alternative AD Option!", "Alternative AD Option", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+            $null = [System.Windows.MessageBox]::Show("Error while loading the Native AD Option!", "Native AD Option", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
         }
     } elseif (get-module -ListAvailable  ActiveDirectory -ErrorAction SilentlyContinue) {
         try {
@@ -730,28 +1189,30 @@ function Invoke-LoadModules {
         } catch {
             $SyncHash.WPFControl_tbUsername.Text = "Error while loading ActiveDirectory Module!"
             if ($SyncHash.WPFControl_gbUser.IsEnabled) { $SyncHash.WPFControl_gbUser.IsEnabled = $false }
-            $null = [System.Windows.MessageBox]::Show("Error while loading the `"ActiveDirectory Module`"!`r`nYou can try to set the (experimental) Alt Module option under settings.", "ActiveDirectory Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+            $null = [System.Windows.MessageBox]::Show("Error while loading the `"ActiveDirectory Module`"!`r`nYou can try to set the (experimental) `"Native AD`" option under settings.", "ActiveDirectory Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
         }
     } else {
         $SyncHash.WPFControl_tbUsername.Text = "ActiveDirectory Module NOT Found!"
         if ($SyncHash.WPFControl_gbUser.IsEnabled) { $SyncHash.WPFControl_gbUser.IsEnabled = $false }
-        $null = [System.Windows.MessageBox]::Show("The PowerShell Module `"ActiveDirectory`" was NOT Found!`r`nYou can try to set the (experimental) Alt Module option under settings.", "ActiveDirectory Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+        $null = [System.Windows.MessageBox]::Show("The PowerShell Module `"ActiveDirectory`" was NOT Found!`r`nYou can try to set the (experimental) `"Native AD`" option under settings.", "ActiveDirectory Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     }
-    Invoke-LoadQRModule
+    Import-QRModule
     Write-Verbose "Ending function   : Get-AdsiADDomain"
 }
-function Invoke-LoadModulesCL {
+function Import-ModulesCommandLine {
+    Write-Verbose "Starting function : Import-ModulesCommandLine"
     if (get-module -ListAvailable  ActiveDirectory -ErrorAction SilentlyContinue) {
         Write-Verbose "Loading ActiveDirectory Module"
         Import-Module -Name ActiveDirectory -Verbose:$False
     } else {
         Throw "ActiveDirectory Module NOT Found!"
     }
-    Invoke-LoadQRModule
+    Import-QRModule
+    Write-Verbose "Ending function   : Import-ModulesCommandLine"
 }
 
-function Invoke-LoadAppImage {
-    Write-Verbose "Starting function : Invoke-LoadAppImage"
+function Import-GUIAppImage {
+    Write-Verbose "Starting function : Import-GUIAppImage"
     $AppImage = New-Object System.Windows.Media.Imaging.BitmapImage
     $AppImage.BeginInit()
     $AppImage.StreamSource = [System.IO.MemoryStream][System.Convert]::FromBase64String($AppImageB64)
@@ -759,16 +1220,40 @@ function Invoke-LoadAppImage {
     $AppImage.Freeze()
     $SyncHash.Form.Icon = $AppImage
     $SyncHash.WPFControl_AppImage.Source = $AppImage
-    Write-Verbose "Ending function   : Invoke-LoadAppImage"
+    Write-Verbose "Ending function   : Import-GUIAppImage"
 }
 
-function Invoke-LoadSettings {
+function Set-GUISettingsEncryption {
+    [CmdLetBinding()]
+    param(
+        [Parameter(Position = 0, Mandatory)]
+        $Setting
+    )
+    Write-Verbose "Starting function : Set-GUISettingsEncryption"
+    switch ($Setting) {
+        $true { 
+            $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.IsEnabled = $true
+            Break
+        }
+        $false { 
+            $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = ""
+            $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.IsEnabled = $false
+            Break
+        }
+        Default {
+            Break
+        }
+    }
+    Write-Verbose "Ending function   : Set-GUISettingsEncryption"
+}
+
+function Import-GUISettings {
     [CmdletBinding()]
     param (
         [String]
         $Path
     )
-    Write-Verbose "Starting function : Invoke-LoadSettings"
+    Write-Verbose "Starting function : Import-GUISettings"
     if (Test-Path -Path $Path) {
         try {
             $SyncedVariables.Settings = Import-Clixml -Path $Path
@@ -792,16 +1277,43 @@ function Invoke-LoadSettings {
     $SyncHash.WPFControl_tbLDAPAttribute.Text = $SyncedVariables.Settings.LDAPSettings.LDAPAttribute
     $SyncHash.WPFControl_tbAttribute.Text = $SyncedVariables.Settings.LDAPSettings.LDAPAttribute
     $SyncedVariables.Attribute = $SyncedVariables.Settings.LDAPSettings.LDAPAttribute
-    if (-Not [String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.LDAPAlternativeModules)) {
-        $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked = $SyncedVariables.Settings.LDAPSettings.LDAPAlternativeModules
-        $Script:AlternativeLDAPModule = $SyncedVariables.Settings.LDAPSettings.LDAPAlternativeModules
-    } else {
-        if (-Not ($SyncedVariables.Settings.LDAPSettings | Get-Member -Name LDAPAlternativeModules -ErrorAction SilentlyContinue)) {
-            $SyncedVariables.Settings.LDAPSettings | Add-Member -Type NoteProperty -Name LDAPAlternativeModules -Value $false
+
+    if ([String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.LDAPNativeFunctions)) {
+        if (-Not ($SyncedVariables.Settings.LDAPSettings | Get-Member -Name LDAPNativeFunctions -ErrorAction SilentlyContinue)) {
+            $SyncedVariables.Settings.LDAPSettings | Add-Member -Type NoteProperty -Name LDAPNativeFunctions -Value $false
         }
         $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked = $false
-        $Script:AlternativeLDAPModule = $false
+        $Script:LDAPNativeFunctions = $false
+    } else {
+        $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked = $SyncedVariables.Settings.LDAPSettings.LDAPNativeFunctions
+        $Script:LDAPNativeFunctions = $SyncedVariables.Settings.LDAPSettings.LDAPNativeFunctions
     }
+
+    if ([String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.EncryptionEnabled)) {
+        if (-Not ($SyncedVariables.Settings.LDAPSettings | Get-Member -Name EncryptionEnabled -ErrorAction SilentlyContinue)) {
+            $SyncedVariables.Settings.LDAPSettings | Add-Member -Type NoteProperty -Name EncryptionEnabled -Value $false
+        }
+        $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsChecked = $false
+    } else {
+        $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsChecked = $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled
+    }
+    Set-GUISettingsEncryption $($SyncedVariables.Settings.LDAPSettings.EncryptionEnabled)
+    
+    if ([String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint)) {
+        if (-Not ($SyncedVariables.Settings.LDAPSettings | Get-Member -Name SecretEncryptionCertificateThumbprint -ErrorAction SilentlyContinue)) {
+            $SyncedVariables.Settings.LDAPSettings | Add-Member -Type NoteProperty -Name SecretEncryptionCertificateThumbprint -Value $null
+        }
+        $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = $null
+    } else {
+        $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = $SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint
+    }
+
+    if ([String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.LDAPTokenSecretEncryptionCertificateSource)) {
+        if (-Not ($SyncedVariables.Settings.LDAPSettings | Get-Member -Name LDAPTokenSecretEncryptionCertificateSource -ErrorAction SilentlyContinue)) {
+            $SyncedVariables.Settings.LDAPSettings | Add-Member -Type NoteProperty -Name LDAPTokenSecretEncryptionCertificateSource -Value "Store"
+        }
+    }
+    #From Commandline param
     if (-Not [String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.LDAPAttribute)) {
         $Script:Attribute = $SyncedVariables.Settings.LDAPSettings.LDAPAttribute
     }
@@ -814,7 +1326,19 @@ function Invoke-LoadSettings {
         $SyncedVariables.LDAPCredential = [PSCredential]::Empty
     }
     $SyncedVariables.Settings.AppVersion = $Script:AppVersion
-    Write-Verbose "Ending function   : Invoke-LoadSettings"
+    if ($SyncedVariables.Settings.LDAPSettings.EncryptionEnabled) {
+        try {
+            $CertTest = Test-CertificatePresent -Thumbprint $SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint
+            if ($CertTest -ne $true) {
+                $null = [System.Windows.MessageBox]::Show("No valid certificate found with thumbprint:`r`n`"$($SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint)`"", "Error", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+            }
+        } catch {
+            $null = [System.Windows.MessageBox]::Show("$($_.Exception.Message)", "Error", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+            $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsChecked = $false
+            $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled = $false
+        }
+    }
+    Write-Verbose "Ending function   : Import-GUISettings"
 }
 function ConvertTo-PlainText {
     [CmdletBinding()]
@@ -834,13 +1358,13 @@ function ConvertTo-PlainText {
     }
 }
 
-function Invoke-SaveSettings {
+function Export-GUISettings {
     [CmdletBinding()]
     param (
         [String]
         $Path
     )
-    Write-Verbose "Starting function : Invoke-SaveSettings"
+    Write-Verbose "Starting function : Export-GUISettings"
     try {
         $SyncedVariables.Settings.GatewayURI = $SyncHash.WPFControl_tbGatewayURI.Text
         $SyncedVariables.Settings.QRSize = $SyncHash.WPFControl_tbQRSize.Text
@@ -849,8 +1373,10 @@ function Invoke-SaveSettings {
         $SyncedVariables.Settings.LDAPSettings.LDAPUsername = $SyncHash.WPFControl_tbLDAPUsername.Text
         $SyncedVariables.Settings.LDAPSettings.LDAPPassword = try { ConvertTo-SecureString -String $($SyncHash.WPFControl_pbLDAPPassword.Password) -AsPlainText -Force -ErrorAction Stop } catch { $null }
         $SyncedVariables.Settings.LDAPSettings.LDAPAttribute = $SyncHash.WPFControl_tbLDAPAttribute.Text
-        $SyncedVariables.Settings.LDAPSettings.LDAPAlternativeModules = $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked
-        $SyncedVariables.Settings.AppVersion = $AppVersion
+        $SyncedVariables.Settings.LDAPSettings.LDAPNativeFunctions = $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked
+        $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled = $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsChecked
+        $SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint = $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text
+        $SyncedVariables.Settings.AppVersion = $Script:AppVersion
         Export-CliXml -Path $Path -InputObject $SyncedVariables.Settings -Force
         Update-Gui
         Write-Verbose "Settings saved"
@@ -859,10 +1385,10 @@ function Invoke-SaveSettings {
     }
 }
 
-function Invoke-EndApplication {
+function End-GUIApplication {
     [CmdletBinding()]
     param ()
-    Write-Verbose "Starting function : Invoke-EndApplication"
+    Write-Verbose "Starting function : End-GUIApplication"
     try {
         if ($SyncedVariables.IsGUI) {
             $SyncHash.Form.Close()
@@ -884,7 +1410,38 @@ function Invoke-EndApplication {
     } catch { "ERROR: $($_.Exception.Message)" } 
 }
 
-#region Alternative AD Functions
+function Test-GUIPoSHForEncryption {
+    Write-Verbose "Starting function : Test-GUIPoSHForEncryption"
+    if ($PSVersionTable.PSVersion -gt [Version]"7.1.0") {
+        Write-Verbose "Encryption is possible, PoSH version is higher than 7.1.0 ($($PSVersionTable.PSVersion))"
+        $SyncedVariables.EncryptionAllowed = $true
+        $SyncHash.WPFControl_gbEncryption.IsEnabled = $true
+        $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsEnabled = $true
+    } else {
+        Write-Verbose "Encryption is NOT possible, PoSH version is lower than 7.1.0 ($($PSVersionTable.PSVersion))"
+        $SyncedVariables.EncryptionAllowed = $false
+        $SyncHash.WPFControl_gbEncryption.IsEnabled = $false
+        $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsEnabled = $false
+        $SyncHash.WPFControl_gbEncryption.Header = "Encryption  -=-  Disabled  -=-  Install PowerShell v7.1 or higher to use encryption!"
+    }
+    Write-Verbose "Ending function   : Test-GUIPoSHForEncryption"
+}
+
+
+#region ADSI Functions
+
+function ConvertFrom-HashTable {
+    [CmdletBinding()]
+    param(
+        [Parameter(ValueFromPipeline)]
+        [HashTable]$Collection
+    )
+    $Object = New-Object PSObject
+    foreach ($key in $Collection.keys) {
+        $Object | Add-Member -MemberType NoteProperty -Name $key -Value ($Collection.$Key | ForEach-Object { $_ })
+    }
+    return $Object
+}
 
 function Get-AdsiADDomain {
     [CmdletBinding()]
@@ -892,9 +1449,9 @@ function Get-AdsiADDomain {
         [System.Management.Automation.PSCredential]
         [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
 
-        [String]$Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer,
+        [String]$Server,
 
-        [Int]$Port = [Int]$SyncedVariables.Settings.LDAPSettings.LDAPPort
+        [Int]$Port
     )
     Write-Verbose "Starting function : Get-AdsiADDomain"
 
@@ -947,9 +1504,9 @@ function Test-AdsiADConnection {
         [System.Management.Automation.PSCredential]
         [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
 
-        [String]$Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer,
+        [String]$Server,
 
-        [Int]$Port = [Int]$SyncedVariables.Settings.LDAPSettings.LDAPPort
+        [Int]$Port
     )
     Write-Verbose "Starting function : Test-AdsiADConnection"
     if (-not ($Credential -is [System.Management.Automation.PSCredential])) {
@@ -983,7 +1540,7 @@ function Test-AdsiADConnection {
         Write-Verbose $($_.Exception.Message)
         $result = $false
     }
-    Write-Verbose "Ending function   : Test-AdsiADConnection"
+    Write-Verbose "Ending function   : Test-AdsiADConnection [$result]"
     Write-Output $result
 }
    
@@ -997,6 +1554,8 @@ function Get-AdsiADUser {
         [Int]$SearchLimit = 200,
         
         [String]$SearchBase,
+
+        [String]$LDAPFilter,
         
         [System.Management.Automation.PSCredential]
         [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
@@ -1014,20 +1573,23 @@ function Get-AdsiADUser {
     if (($Credential -eq [System.Management.Automation.PSCredential]::Empty) -and ($SyncedVariables.LDAPCredential -is [System.Management.Automation.PSCredential])) {
         $Credential = $SyncedVariables.LDAPCredential
     }
+    if (-Not [String]::IsNullOrEmpty($Name)) {
+        $LDAPFilter = "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))"
+    }
     $LDAPPath = "LDAP://"
-    if ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -ne 0)) {
+    if ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -ne 0 -or -not [String]::IsNullOrEmpty($Port))) {
         $LDAPPath += "$($Server):$($Port)/"
-    } elseif ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -eq 0)) {
+    } elseif ((-Not [String]::IsNullOrEmpty($Server)) -And ($Port -eq 0 -or [String]::IsNullOrEmpty($Port))) {
         $LDAPPath += "$($Server)/"
     }
     if ([String]::IsNullOrEmpty($SearchBase)) {
-        $LDAPPath += (Get-AdsiADDomain).DistinguishedName
+        $LDAPPath += (Get-AdsiADDomain -Credential $Credential -Server $Server -Port $Port).DistinguishedName
     } elseif ($SearchBase -like "LDAP://*") {
         $LDAPPath += $SearchBase -replace "LDAP://", $null
     } elseif ($SearchBase -match '(?im)^(?:(?<cn>CN=(?<name>[^,]*)),)?(?:(?<path>(?:(?:CN|OU)=[^,]+,?)+),)?(?<domain>(?:DC=[^,]+,?)+)$') {
         $LDAPPath += $SearchBase
     } else {
-        $LDAPPath += (Get-AdsiADDomain).DistinguishedName
+        $LDAPPath += (Get-AdsiADDomain -Credential $Credential -Server $Server -Port $Port).DistinguishedName
     }
     Write-Verbose "Path: `"$LDAPPath`""
     if ($null -eq $Credential -or $Credential -eq [PSCredential]::Empty) { 
@@ -1038,9 +1600,8 @@ function Get-AdsiADUser {
     }
     $adSearcher = New-Object -TypeName System.DirectoryServices.DirectorySearcher
     $adSearcher.SearchRoot = $searchRoot
-    $adSearcher.Filter = "(&(objectCategory=person)(objectClass=user)(|(Name=*$Name*)(UserPrincipalName=*$Name*)(SamAccountName=*$Name*)(Sn=*$Name*)(GivenName=*$Name*)))"
+    $adSearcher.Filter = $LDAPFilter
     $adSearcher.SizeLimit = "$SearchLimit"
-        
     $Attributes += @("Name", "UserPrincipalName", "SamAccountName", "Sn", "GivenName", "distinguishedName")
     $Attributes = $Attributes | Select-Object -Unique
     foreach ($item in $Attributes) { $adSearcher.PropertiesToLoad.Add($item) | out-null } 
@@ -1051,7 +1612,7 @@ function Get-AdsiADUser {
     }
     Write-Verbose "Ending function   : Get-AdsiADUser"
 }
-    
+   
 function Set-AdsiADUser {
     [CmdletBinding()]
     Param(
@@ -1064,9 +1625,9 @@ function Set-AdsiADUser {
         [System.Management.Automation.PSCredential]
         [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
 
-        [String]$Server = $SyncedVariables.Settings.LDAPSettings.LDAPServer,
+        [String]$Server,
 
-        [Int]$Port = [Int]$SyncedVariables.Settings.LDAPSettings.LDAPPort
+        [Int]$Port
         
     )
     Write-Verbose "Starting function : Set-AdsiADUser"
@@ -1100,26 +1661,1046 @@ function Set-AdsiADUser {
     if ([String]::IsNullOrEmpty($NewValue)) {
         $UserObject.PutEx(1, $Attribute, $null)
     } else {
-        $UserObject.$($SyncedVariables.Attribute) = $NewValue
+        $UserObject.$($Attribute) = $NewValue
     }
     $UserObject.SetInfo()
     Write-Verbose "Ending function   : Set-AdsiADUser"
 }
 
+#endregion ADSI Functions
+
+#region Encryption
+function Protect-Message {
+    [CmdletBinding(DefaultParameterSetName = 'Key')]
+    param (
+        [Parameter(ParameterSetName = 'Key', Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [Byte[]]$key,
+
+        [Parameter(ParameterSetName = 'Key', Mandatory)]
+        [Parameter(ParameterSetName = 'CertFile', Mandatory)]
+        [Parameter(ParameterSetName = "CertThumbprint", Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [String]$message,
+
+        [Parameter(ParameterSetName = 'CertFile', Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [String]$certPath,
+
+        [Parameter(ParameterSetName = "CertThumbprint", Mandatory)]
+        [String]$Thumbprint
+    )
+    Write-Verbose "Starting function : Protect-Message"# [message:$message key:$(-Not [String]::IsNullOrEmpty($key))]"
+    try {
+        if ($PsCmdlet.ParameterSetName -eq 'CertFile') {
+            $Key = New-SymmetricKey -CertPath $CertPath
+        }
+        if ($PsCmdlet.ParameterSetName -eq 'CertThumbprint') {
+            $Key = New-SymmetricKey -Thumbprint $Thumbprint
+        }
+        [Byte[]]$byteMessage = ([System.Text.Encoding]::UTF8.GetBytes($message));
+        #$random = [System.Security.Cryptography.RNGCryptoServiceProvider]::new()
+        $nonce = ([Byte[]]::new(12));
+        #$random.GetBytes($nonce)
+        ([Security.Cryptography.RNGCryptoServiceProvider]::Create().GetBytes($nonce));
+        $cipherText = [Byte[]]::new(($byteMessage.Length));
+        $tag = [Byte[]]::new(16);
+        $aesGcm = [System.Security.Cryptography.AesGcm]::new($key);
+        $aesGcm.encrypt( $nonce, $byteMessage, $cipherText, $tag );
+        $encryptedText = '{0}.{1}' -f $(ConvertTo-Base64UrlSafe ([System.Convert]::ToBase64String($nonce))), $(ConvertTo-Base64UrlSafe ([System.Convert]::ToBase64String($cipherText)));
+    } catch {
+        Write-Verbose "Caught an error, $($_.Exception.Message)"
+    }
+    Write-Output $encryptedText
+    Write-Verbose "Ending function   : Protect-Message"# [$encryptedText]"
+}
+
+function Invoke-IncrementBytes {
+    [CmdletBinding()]
+    param (
+        [Byte[]]$bytes
+    )
+    Write-Verbose "Starting function : Invoke-IncrementBytes"
+    for ($i = $bytes.Length - 1; $i -ge 0; $i--) {
+        if ($bytes[$i] -lt 255) {
+            $bytes[$i]++
+            break
+        }
+        $bytes[$i] = 0
+    }
+    Write-Verbose "Ending function   : Invoke-IncrementBytes"
+}
+function Invoke-XorBytes {
+    [CmdletBinding()]
+    param (
+        [Byte[]]$a,
+
+        [Byte[]]$b
+    )
+    Write-Verbose "Starting function : Invoke-XorBytes"#[length:$length][a:$a][b:$b]"
+    $result = [Byte[]]::new($a.Length)
+    for ($i = 0; $i -lt ($result.Length); $i++) { 
+        $result[$i] = (($a[$i]) -bxor ($b[$i]))
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : Invoke-XorBytes"#[$result]"​
+}
+
+function Get-CertificateFromStore {
+    [CmdletBinding()]
+    param (
+        [Parameter(Position = 0)]
+        [String]$Thumbprint
+    )
+    $result = Get-Childitem -Path Cert:\ -Recurse | Where-Object { $_.Thumbprint -eq $Thumbprint } | Select-Object -First 1
+    #$certificateStore = New-Object System.Security.Cryptography.X509Certificates.X509Store([System.Security.Cryptography.X509Certificates.StoreName]::My, [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+    #$certificateStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+    #$storeCertificate = $certificateStore.Certificates | Where-Object { $_.Thumbprint -eq $Thumbprint }
+    Write-Output $result
+}
+
+function Unprotect-Message {
+    [CmdletBinding()]
+    param(
+        [Byte[]]$SessionKey,
+        
+        [Byte[]]$InitVector,
+
+        [Byte[]]$CipherText
+    )
+    Write-Verbose "Starting function : Unprotect-Message"#`r`nsessionKey:$sessionKey`r`ninitVector:$initVector`r`nciphertext:$ciphertext"
+    $aesManaged = New-Object "System.Security.Cryptography.AesManaged";
+    $aesManaged.Mode = [System.Security.Cryptography.CipherMode]::ECB;
+    $blockLength = $aesManaged.BlockSize / 8;
+    $encryptor = $aesManaged.CreateEncryptor($SessionKey, [Byte[]]::new(16));
+    $decryptedBytes = [Byte[]]::new(0);
+    [Byte[]]$ctr = $InitVector + 0, 0, 0, 1;
+    for ($i = 0; $i -lt $CipherText.Length; $i += $blockLength) {
+        Invoke-IncrementBytes -bytes $ctr;
+        $encryptedBlock = $encryptor.TransformFinalBlock($ctr, 0, $ctr.Length);
+        $decryptedBytes += (Invoke-XorBytes -a $CipherText[$i..($i + $blockLength - 1)] -b $encryptedBlock);
+    }
+    #$aesManaged.Dispose()
+    $plainText = [system.Text.Encoding]::UTF8.GetString($decryptedBytes);
+    Write-Output $plainText
+    Write-Verbose "Ending function   : Unprotect-Message"
+}
+
+function Get-HashSha1 {
+    [CmdletBinding(DefaultParameterSetName = "CertThumbprint")]
+    param (
+        [Parameter(ParameterSetName = "CertFile", Mandatory)]
+        $CertPath,
+
+        [Parameter(ParameterSetName = "CertThumbprint", Mandatory)]
+        $Thumbprint
+    )
+    Write-Verbose "Starting function : Get-HashSha1 [$($PsCmdlet.ParameterSetName)]"
+    if ($PsCmdlet.ParameterSetName -eq 'CertFile') {
+        $cert = [System.Security.Cryptography.X509Certificates.X509Certificate]::new($certPath)
+    }
+    if ($PsCmdlet.ParameterSetName -eq 'CertThumbprint') {
+        $certificate = Get-CertificateFromStore -Thumbprint $Thumbprint
+        $cert = [System.Security.Cryptography.X509Certificates.X509Certificate]::new($certificate)
+    }
+    $result = $cert.GetCertHash()
+    Write-Output $result
+    Write-Verbose "Ending function   : Get-HashSha1"# [$($cert.GetCertHash())]"
+}
+
+
+function Test-CertificateOnSecret {
+    [CmdletBinding(DefaultParameterSetName = "CertThumbprint")]
+    param (
+        [object]$object,
+
+        [Parameter(ParameterSetName = "CertFile", Mandatory)]
+        $CertPath,
+
+        [Parameter(ParameterSetName = "CertThumbprint", Mandatory)]
+        $Thumbprint
+    )
+    if ($PsCmdlet.ParameterSetName -eq 'CertFile') {
+        $certificateHash = Get-HashSha1 -CertPath $certPath
+    }
+    if ($PsCmdlet.ParameterSetName -eq 'CertThumbprint') {
+        $certificateHash = Get-HashSha1 -Thumbprint $Thumbprint
+    }
+    
+    $result = $false
+    try {
+
+        if (-Not ($object -is [byte[]]) -and (Test-ValidEncryptedSecret $object)) {
+            $kid, $iv, $ciphertext = $Secret.split(".")
+            $object = [Convert]::FromBase64String((ConvertFrom-Base64UrlSafe $kid))
+        }
+        if ($object -is [byte[]]) {
+            if (@(Compare-Object -ReferenceObject $object -DifferenceObject $certificateHash -SyncWindow 0).Count -eq 0) {
+                $result = $true
+            }
+        }
+    } catch {
+        $result = $false
+    }
+    Write-Output $result
+}
+
+function Get-HmacSha256 {
+    [CmdletBinding()]
+    param (
+        [Byte[]]$key,
+
+        [Byte[]]$data
+    )
+    $hmac = [System.Security.Cryptography.HMACSHA256]::new($key)
+    $result = $hmac.ComputeHash($data)
+    Write-Output $result
+}
+
+function Get-HKDF {
+    [CmdletBinding()]
+    param (
+        [Parameter(Position = 0)]
+        $length,
+
+        [Parameter(Position = 1)]
+        $ikm,
+        
+        [Parameter(Position = 2)]
+        $salt,
+        
+        [Parameter(Position = 3)]
+        $info = [Byte[]]::new(0)
+    )
+    Write-Verbose "Starting function : Get-HKDF"
+    $HashAlgorithm = [System.Security.Cryptography.HashAlgorithmName]::SHA256;
+    $result = [System.Security.Cryptography.HKDF]::DeriveKey($HashAlgorithm, $ikm, $length, $salt, $info)
+    Write-Output $result
+    Write-Verbose "Ending function   : Get-HKDF"
+}
+
+
+function New-SymmetricKey {
+    [CmdletBinding(DefaultParameterSetName = "CertThumbprint")]
+    param (
+        [Parameter(ParameterSetName = "CertFile", Position = 0, Mandatory)]
+        $CertPath,
+
+        [Parameter(ParameterSetName = "CertThumbprint", Position = 0, Mandatory)]
+        $Thumbprint
+    )
+    Write-Verbose "Starting function : New-SymmetricKey [$($PsCmdlet.ParameterSetName)]"
+    $ikm = ""
+    $salt = ""
+
+    if ($PsCmdlet.ParameterSetName -eq 'CertFile') {
+            
+        $certFileString = Get-Content -Path $CertPath -Raw
+        if ($certFileString -match "(?s)(?<=-----BEGIN CERTIFICATE-----).*?(?=-----END CERTIFICATE-----)") {
+            $ikm = $Matches.Values[0];
+            $ikm = $ikm -replace '\n', $null -replace '\r', $null;
+            $ikm = [system.Text.Encoding]::UTF8.GetBytes($ikm);
+        }
+        $RSA = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+        $RSA.ImportFromPem($certFileString);
+        $key = $rsa.ExportRSAPrivateKey();
+    }
+
+    if ($PsCmdlet.ParameterSetName -eq 'CertThumbprint') {
+        $certificate = Get-CertificateFromStore -Thumbprint $Thumbprint
+        $publicKey = $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+        $ikm = [system.Text.Encoding]::UTF8.GetBytes([System.Convert]::ToBase64String($publicKey));
+        $key = $certificate.PrivateKey.ExportRSAPrivateKey()
+    }
+    $key = [system.Text.Encoding]::UTF8.GetBytes([System.Convert]::ToBase64String($key));
+    $salt = $key
+    #When switched -salt $ikm -ikm $salt, same result as python scripts
+    $result = Get-HKDF -length 32 -salt $ikm -ikm $salt;
+    Write-Output $result
+    Write-Verbose "Ending function   : New-SymmetricKey"
+}
+
+function Test-ValidDeviceSecretObject {
+    [CmdletBinding()]
+    param (
+        [Parameter(Position = 0, ValueFromPipeline)]    
+        [Object]$Object
+    )
+    Write-Verbose "Starting function : Test-ValidDeviceSecretObject"
+    $result = $false
+    if (($null -ne $object) -and 
+        ($object -is [Array]) -and 
+        ( $object -is [Object]) -and 
+        (($object | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Where-Object { $_.Name -in "DeviceName", "Secret" }).Count -eq 2) -and 
+        ($object.Count -ge 1) ) {
+        $result = $true
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : Test-ValidDeviceSecretObject [$result]"
+}
+
+function Test-ValidEncryptedSecret {
+    [CmdletBinding()]
+    [Alias("Test-IsEncryptedSecret")]
+    param (
+        [Parameter(Position = 0, ValueFromPipeline)]    
+        [String]$secret
+    )
+    Write-Verbose "Starting function : Test-ValidEncryptedSecret"
+    $result = $false
+    if ($secret -match '^[-A-Za-z0-9+\/_=]*\.[-A-Za-z0-9+\/_=]*\.[-A-Za-z0-9+\/_=]*$') {
+        $result = $true
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : Test-ValidEncryptedSecret [$result]"
+}
+
+function Test-ValidDecryptedSecret {
+    [CmdletBinding()]
+    param (
+        [Parameter(Position = 0, ValueFromPipeline)]    
+        [String]$secret
+    )
+    Write-Verbose "Starting function : Test-ValidDecryptedSecret"
+    $result = $false
+    if ($secret -match '^[-A-Za-z0-9]{20,}$') {
+        $result = $true
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : Test-ValidDecryptedSecret [$result]"
+}
+
+function Test-ValidClearTextSecret {
+    [CmdletBinding()]
+    param (
+        [Parameter(Position = 0, ValueFromPipeline)]    
+        [String]$secret
+    )
+    Write-Verbose "Starting function : Test-ValidClearTextSecret"
+    $result = $false
+    try {
+        if (-Not [String]::IsNullOrEmpty($secret)) {
+            if ($secret -match '^#@(?>[a-zA-Z0-9]*=[a-zA-Z0-9]*\&\,){1,}$') {
+                $result = $true
+            }
+        }
+    } catch {
+        $result = $false
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : Test-ValidClearTextSecret [$result]"
+}
+
+function Test-ValidEncryptedJson {
+    [CmdletBinding()]
+    param (
+        [Parameter(Position = 0, ValueFromPipeline)]    
+        [String]$EncryptedJson
+    )
+    Write-Verbose "Starting function : Test-ValidEncryptedJson"
+    $result = $false
+    $notValid = 0
+    try {
+        if (-Not [String]::IsNullOrEmpty($EncryptedJson)) {
+            if (Test-IsJson $EncryptedJson) {
+                $JsonData = $EncryptedJson | ConvertFrom-Json
+
+                if (($JsonData.otpdata | Get-Member -MemberType NoteProperty | Where-Object { $_.Name -eq "devices" }).Count -eq 1) {
+                    $DeviceNames = @($JsonData.otpdata.devices | Get-Member | Where-Object { $_.MemberType -eq "NoteProperty" } | Select-Object -ExpandProperty Name)
+                    if ($DeviceNames.Count -ge 1) {
+                        foreach ($DeviceName in $DeviceNames) {
+                            $EncryptedSecret = $JsonData.otpdata.devices."$DeviceName"
+                            if (-Not (Test-ValidEncryptedSecret $EncryptedSecret)) {
+                                $notValid++
+                            }
+                        }
+                    }
+                }
+                if ($notValid -eq 0) {
+                    $result = $true
+                }
+            }
+        }
+    } catch {
+        $result = $false
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : Test-ValidEncryptedJson [$result]"
+}
+
+function Unprotect-Secret {
+    [CmdletBinding(DefaultParameterSetName = "CertThumbprint")]
+    param (
+        [Parameter(Position = 0, Mandatory)]    
+        [String]$Secret,
+
+        [Parameter(ParameterSetName = "CertFile", Position = 1, Mandatory)]    
+        $CertPath,
+
+        [Parameter(ParameterSetName = "CertThumbprint", Position = 1, Mandatory)]
+        $Thumbprint
+    )
+    Write-Verbose "Starting function : Unprotect-Secret [$($PsCmdlet.ParameterSetName)]"
+    $result = $false
+    try {
+        if (Test-ValidEncryptedSecret $secret) {
+            if ($PsCmdlet.ParameterSetName -eq 'CertFile') {
+                $Key = New-SymmetricKey -CertPath $CertPath
+            }
+            if ($PsCmdlet.ParameterSetName -eq 'CertThumbprint') {
+                $Key = New-SymmetricKey -Thumbprint $Thumbprint
+            }
+            $kid, $iv, $cipherText = $Secret.split(".")
+            $kid = [Convert]::FromBase64String((ConvertFrom-Base64UrlSafe $kid))
+            $cipherText = [Convert]::FromBase64String((ConvertFrom-Base64UrlSafe $cipherText))
+            $iv = [Convert]::FromBase64String((ConvertFrom-Base64UrlSafe $iv))
+            $DecryptedSecretJson = Unprotect-Message -SessionKey $key -InitVector $iv -CipherText $cipherText
+            if (Test-IsJson $DecryptedSecretJson) {
+                $DecryptedSecret = $DecryptedSecretJson | ConvertFrom-Json
+            }
+            $result = $DecryptedSecret.secret
+            if (-Not (Test-ValidDecryptedSecret $result)) {
+                $result = $false
+            }
+        }
+    } catch {
+        Write-Verbose "Caught an error while decrypting the token."
+        Write-Verbose "$($_.Exception.Message)"
+        $result = $false
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : Unprotect-Secret"# [result:$result]"
+}
+
+function Protect-Secret {
+    [CmdletBinding(DefaultParameterSetName = "CertThumbprint")]
+    param (
+        [Parameter(Position = 0, Mandatory)]    
+        [String]$Secret,
+
+        [Parameter(ParameterSetName = "CertFile", Position = 1, Mandatory)]    
+        $CertPath,
+
+        [Parameter(ParameterSetName = "CertThumbprint", Position = 1, Mandatory)]
+        $Thumbprint
+    )
+    Write-Verbose "Starting function : Protect-Secret [$($PsCmdlet.ParameterSetName)]"
+    $result = $false
+    try {
+        if (Test-ValidDecryptedSecret $Secret) {
+            $messageToEncrypt = @{secret = $Secret } | ConvertTo-Json -Compress
+            if ($PsCmdlet.ParameterSetName -eq 'CertFile') {
+                $Key = New-SymmetricKey -CertPath $CertPath
+                $kid = Get-HashSha1 -certPath $CertPath
+            }
+            if ($PsCmdlet.ParameterSetName -eq 'CertThumbprint') {
+                $Key = New-SymmetricKey -Thumbprint $Thumbprint
+                $kid = Get-HashSha1 -Thumbprint $Thumbprint
+            }
+            $ciphertext = Protect-Message -key $Key -message $messageToEncrypt
+            $kid = ConvertTo-Base64UrlSafe ([Convert]::ToBase64String($kid))
+            $encryptedSecret = '{0}.{1}' -f $kid, $ciphertext
+            $result = $encryptedSecret
+            if (-Not (Test-ValidEncryptedSecret $result)) {
+                $result = $false
+            }
+        }
+    } catch {
+        Write-Verbose "Caught an error while encrypting the secret."
+        Write-Verbose "$($_.Exception.Message)"
+        $result = $false
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : Protect-Secret"# [$result]"
+}
+
+function Test-IsJson {
+    [CmdletBinding()]
+    param (
+        [Parameter(Position = 0, Mandatory, ValueFromPipeline)]    
+        [Object]$data
+    )
+    Write-Verbose "Starting function : Test-IsJson"
+    $result = $false
+    try {
+        if (-not [String]::IsNullOrEmpty($data)) {
+            if ($data | ConvertFrom-Json -ErrorAction Stop) {
+                $result = $true
+            }
+        }
+    } catch {
+        $result = $false
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : Test-IsJson [result:$result]"
+}
+
+function Test-CertificatePresent {
+    [CmdletBinding()]
+    param (
+        [Parameter(Position = 0, Mandatory, ValueFromPipeline)]    
+        [String]$Thumbprint
+    )
+    Write-Verbose "Starting function : Test-IsValidThumbPrint"
+    $result = $false
+    if (-not [String]::IsNullOrEmpty($Thumbprint)) {
+        try {
+            $certificate = Get-CertificateFromStore -Thumbprint $Thumbprint
+        } catch {
+            $ErrorMessage = "No valid certificate found, correct thumbprint configured?"
+        }
+        if ([String]::IsNullOrEmpty($certificate.SerialNumber)) {
+            $ErrorMessage = "No valid certificate found, correct thumbprint configured?"
+        } elseif (-Not ($certificate -is [System.Security.Cryptography.X509Certificates.X509Certificate2])) {
+            $ErrorMessage = "The found certificate is not valid!"
+        } elseif (-not $certificate.HasPrivateKey) {
+            $ErrorMessage = "No private key found!"
+        } else {
+            try {
+                $SymmetricKey = [Convert]::ToBase64String((New-SymmetricKey -Thumbprint $thumbprint))
+                if (-not [String]::IsNullOrEmpty($SymmetricKey)) {
+                    $result = $true
+                }
+            } catch {
+                $ErrorMessage = "Could not read private key!`r`n$($_Exception.Message)"
+            }
+        }
+    } else {
+        $ErrorMessage = "No valid thumbprint found (empty)"
+    }
+    if ($ErrorActionPreference -ne "SilentlyContinue" -and -Not [String]::IsNullOrEmpty($ErrorMessage)) {
+        Throw $ErrorMessage
+    } elseif (-Not [String]::IsNullOrEmpty($ErrorMessage)) {
+        Write-Verbose "ERROR: $ErrorMessage"
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : Test-IsValidThumbPrint [result:$result]"    
+}
+
+function ConvertFrom-Base64UrlSafe {
+    [CmdletBinding()]
+    param (
+        [Parameter(Position = 0, Mandatory, ValueFromPipeline)]
+        [string] $Text
+    )
+
+    $Text = $Text -Replace ('-', '+')
+    $Text = $Text -Replace ('_', '/')
+
+    switch ($Text.Length % 4) {
+        0 { Break }
+        2 { $Text += '=='; Break }
+        3 { $Text += '='; Break }
+        Default { Write-Warning 'Illegal base64 string!' }
+    }
+    Write-Output $Text
+}
+
+function ConvertTo-Base64UrlSafe {
+    [CmdletBinding()]
+    param (
+        [Parameter(Position = 0, Mandatory, ValueFromPipeline)]
+        [string] $Text,
+
+        [Switch]$NoPadding
+    )
+    if ($NoPadding) {
+        $text = $text.Split('=')[0]
+    }
+    $text = $text.Replace('+', '-').Replace('/', '_')
+    Write-Output $text
+}
+
+function ConvertTo-Hashtable {
+    [CmdletBinding()]
+    [OutputType('HashTable')]
+    param (
+        [Parameter(ValueFromPipeline)]
+        $InputObject
+    )
+    ## Source: https://4sysops.com/archives/convert-json-to-a-powershell-hash-table/
+    process {
+        if ($null -eq $InputObject) {
+            Write-Output $null
+        }
+        if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [String]) {
+            $collection = @(
+                foreach ($object in $InputObject) {
+                    ConvertTo-Hashtable -InputObject $object
+                }
+            )
+            Write-Output -NoEnumerate $collection
+        } elseif ($InputObject -is [PSObject]) {
+            $hash = @{ }
+            foreach ($property in $InputObject.PSObject.Properties) {
+                $hash[$property.Name] = ConvertTo-Hashtable -InputObject $property.Value
+            }
+            Write-Output $hash
+        } else {
+            Write-Output $InputObject
+        }
+    }
+}
+
+function ConvertTo-ClearTextUserAttribute {
+    <#
+    .SYNOPSIS
+        Convert an array of PSCustomObjects to a ClearText User attribute
+    .DESCRIPTION
+        Convert an array of PSCustomObjects to a ClearText User attribute
+    .PARAMETER AttributeValue
+        The Clear Text User attribute value
+    .INPUTS
+        Example: [PSCustomObject]@{ DeviceName='Mobile'; Secret='CHYA3NHIW2YLQPCGS4Z6VV6WBY' }
+    .OUTPUTS
+        Example: [String]'#@Device=SECRETSECRETSECRETSECRET&,'
+    #>
+    [CmdletBinding()]
+    [OutputType('System.String')]
+    param (
+        [Parameter(Position = 0, Mandatory, ValueFromPipeline)]    
+        [Object[]]$object
+    )
+    Write-Verbose "Starting function : ConvertTo-ClearTextUserAttribute"
+    $result = $false
+    $NewResult = "#@"
+    try {
+        if (Test-ValidDeviceSecretObject $object) {
+            $object | ForEach-Object { $NewResult += '{0}={1}&,' -f $_.DeviceName, $_.Secret }
+            if (Test-ValidClearTextSecret $NewResult) {
+                $result = $NewResult
+            }
+        }
+    } catch {
+        Write-Verbose "Caught an error, $($_.Exception.Message)"
+        $result = $false
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : ConvertTo-ClearTextUserAttribute"
+}
+
+function ConvertFrom-ClearTextUserAttribute {
+    <#
+    .SYNOPSIS
+        Convert a ClearText User attribute to an array of PSCustomObjects
+    .DESCRIPTION
+        Convert a ClearText User attribute to an array of PSCustomObjects
+    .PARAMETER AttributeValue
+        The Clear Text User attribute value
+    .INPUTS
+        Example: [String]'#@Device=SECRETSECRETSECRETSECRET&,'
+    .OUTPUTS
+        Example: [PSCustomObject]@{ DeviceName='Mobile'; Secret='CHYA3NHIW2YLQPCGS4Z6VV6WBY' }
+    #>
+    [CmdletBinding()]
+    [OutputType('System.Management.Automation.PSCustomObject')]
+    param (
+        [Parameter(Position = 0, ValueFromPipeline)]     
+        [String]$AttributeValue
+    )
+    Write-Verbose "Starting function : ConvertFrom-ClearTextUserAttribute"
+    $result = $false
+    $NewResult = @()
+    try {
+        if (Test-ValidClearTextSecret -secret $AttributeValue) {
+            $DeviceSecrets = $AttributeValue.Replace('#@', $null).Replace('&,', ',').Split(',').Trim()
+            foreach ($item in $DeviceSecrets) {
+                if (-Not [String]::IsNullOrEmpty($item)) {
+                    $DeviceName, $Secret = $item.Split('=')
+                    if (Test-ValidDecryptedSecret $Secret) {
+                        $NewResult += [PSCustomObject]@{
+                            DeviceName = $DeviceName
+                            Secret     = $Secret
+                        }
+                    }
+                }
+            }
+            if (Test-ValidDeviceSecretObject $NewResult) {
+                $result = $NewResult
+            }
+        }
+    } catch {
+        Write-Verbose "Caught an error, $($_.Exception.Message)"
+        $result = $false
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : ConvertFrom-ClearTextUserAttribute"
+}
+
+function ConvertTo-EncryptedUserAttribute {
+    <#
+    .SYNOPSIS
+        Convert an array of PSCustomObjects to an Encrypted User attribute
+    .DESCRIPTION
+        Convert an array of PSCustomObjects to an Encrypted User attribute
+    .PARAMETER AttributeValue
+        The Clear Text User attribute value
+    .INPUTS
+        Example: [PSCustomObject]@{ DeviceName='Mobile'; Secret='CHYA3NHIW2YLQPCGS4Z6VV6WBY' }
+    .OUTPUTS
+        Example: [String]'{"otpdata":{"devices":{"Mobile":"9tdkfHjemvPj0odSbkKOASuvgkQ=.oWZC4ts_iOeLvEvK.0bb0wGYQFrdeL2su6BaEC5-kAgD4wLiBGJPo0j-55om9SKnE5vv-"}}}'
+    #>
+    [CmdletBinding(DefaultParameterSetName = "CertThumbprint")]
+    [OutputType('System.String')]
+    param (
+        [Parameter(Position = 0, Mandatory, ValueFromPipeline)]    
+        [Object[]]$object,
+
+        [Parameter(ParameterSetName = "CertFile", Position = 1, Mandatory)]    
+        $CertPath,
+
+        [Parameter(ParameterSetName = "CertThumbprint", Position = 1, Mandatory)]
+        $Thumbprint
+    )
+    Begin {
+        Write-Verbose "Starting function : ConvertTo-EncryptedUserAttribute [$($PsCmdlet.ParameterSetName)]"
+        $result = $false
+        $encryptedObject = [PSCustomObject]@{
+            otpdata = [PSCustomObject]@{
+                devices = [PSCustomObject]::new()
+            }
+        }
+    }
+    Process {
+        try {
+            if (Test-ValidDeviceSecretObject $object) {
+                $object | ForEach-Object {
+                    if ($PsCmdlet.ParameterSetName -eq 'CertFile') {
+                        $EncryptedSecret = Protect-Secret -Secret $_.Secret -CertPath $CertPath
+                    }
+                    if ($PsCmdlet.ParameterSetName -eq 'CertThumbprint') {
+                        $EncryptedSecret = Protect-Secret -Secret $_.Secret -Thumbprint $Thumbprint
+                    }
+                    $encryptedObject.otpdata.devices | Add-Member -Name $_.DeviceName -MemberType NoteProperty -Value $EncryptedSecret
+                }
+                $encryptedJson = $encryptedObject | ConvertTo-Json -Compress
+                if (Test-ValidEncryptedJson $encryptedJson) {
+                    $result = $encryptedJson
+                }
+            }
+        } catch {
+            Write-Verbose "Caught an error, $($_.Exception.Message)"
+            $result = $false
+        }
+    }
+    End {
+        Write-Output $result
+        Write-Verbose "Ending function   : ConvertTo-EncryptedUserAttribute"# [$result]"
+    }
+    
+}
+
+function ConvertFrom-EncryptedUserAttribute {
+    <#
+    .SYNOPSIS
+        Convert an Encrypted User attribute to an array of PSCustomObjects
+    .DESCRIPTION
+        Convert an Encrypted User attribute to an array of PSCustomObjects
+    .PARAMETER EncryptedJson
+        The Encrypted User attribute value in Json format
+    .PARAMETER CertPath
+        Path to the Certificate file
+    .INPUTS
+        Example: [String]'{"otpdata":{"devices":{"Mobile":"9tdkfHjemvPj0odSbkKOASuvgkQ=.oWZC4ts_iOeLvEvK.0bb0wGYQFrdeL2su6BaEC5-kAgD4wLiBGJPo0j-55om9SKnE5vv-"}}}'
+    .OUTPUTS
+        Example: [PSCustomObject]@{ DeviceName='Mobile'; Secret='CHYA3NHIW2YLQPCGS4Z6VV6WBY' }
+    #>
+    [CmdletBinding(DefaultParameterSetName = "CertThumbprint")]
+    [OutputType('System.Management.Automation.PSCustomObject')]
+    param (
+        [Parameter(Position = 0, Mandatory, ValueFromPipeline)]     
+        [String]$EncryptedJson,
+
+        [Parameter(ParameterSetName = "CertFile", Position = 1, Mandatory)]    
+        $CertPath,
+
+        [Parameter(ParameterSetName = "CertThumbprint", Position = 1, Mandatory)]
+        $Thumbprint
+    )
+    Write-Verbose "Starting function : ConvertFrom-EncryptedUserAttribute [$($PsCmdlet.ParameterSetName)]"
+    $result = $false
+    $NewResult = @()
+    try {
+        if (Test-IsJson $EncryptedJson) {
+            $JsonData = $EncryptedJson | ConvertFrom-Json
+            if (Test-ValidEncryptedJson $EncryptedJson) {
+                $DeviceNames = @($JsonData.otpdata.devices | Get-Member | Where-Object { $_.MemberType -eq "NoteProperty" } | Select-Object -ExpandProperty Name)
+                foreach ($DeviceName in $DeviceNames) {
+                    $Secret = $JsonData.otpdata.devices."$DeviceName"
+                    if ($PsCmdlet.ParameterSetName -eq 'CertFile') {
+                        if (($null -ne $CertPath) -and (Test-ValidEncryptedSecret $Secret)) {
+                            $Secret = Unprotect-Secret $Secret -CertPath $CertPath
+                        }
+                    }
+                    if ($PsCmdlet.ParameterSetName -eq 'CertThumbprint') {
+                        if (($null -ne $Thumbprint) -and (Test-ValidEncryptedSecret $Secret)) {
+                            $Secret = Unprotect-Secret $Secret -Thumbprint $Thumbprint
+                        }
+                    }
+                    if (Test-ValidDecryptedSecret $Secret) {
+                        $NewResult += [PSCustomObject]@{
+                            DeviceName = $DeviceName
+                            Secret     = $Secret
+                        }
+                    }
+                }
+                if (Test-ValidDeviceSecretObject $NewResult) {
+                    $result = $NewResult
+                }
+            }
+        }
+    } catch {
+        Write-Verbose "Caught an error, $($_.Exception.Message)"
+        $result = $false
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : ConvertFrom-EncryptedUserAttribute"
+}
+
+function Get-AllUsersWithAttribute {
+    [CmdletBinding()]
+    param (
+        [String]$Attribute,
+
+        [String[]]$Attributes,
+
+        [System.Management.Automation.PSCredential]
+        [System.Management.Automation.Credential()]$Credential = [System.Management.Automation.PSCredential]::Empty,
+
+        [String]$Server,
+
+        [Int]$Port
+    )
+    Write-Verbose "Starting function : Get-AllUsersWithAttribute"
+    try {
+        if ($Attribute -notin $Attributes) {
+            $Attributes += $Attribute
+        }
+        $LDAPFilter = '(&(objectCategory=person)(objectClass=user)({0}=*))' -f $Attribute
+        $result = Get-AdsiADUser -Attributes $Attributes -Credential $credential -Server $Server -Port $Port -LDAPFilter $LDAPFilter | Where-Object { (Test-ValidClearTextSecret $_."$Attribute") -Or (Test-ValidEncryptedJson $_."$Attribute") }
+    } catch {
+        
+    }
+    Write-Output $result
+    Write-Verbose "Ending function   : Get-AllUsersWithAttribute"
+}
+
+function Invoke-StartEncryption {
+    Write-Verbose "Starting function : Invoke-StartEncryption"
+    $SyncHash.WPFControl_btnConversionStart.IsEnabled = $false
+    $Script:LogFile = $SyncHash.WPFControl_tbLogPathPath.Text
+    if ([String]::IsNullOrEmpty($Script:LogFile)) {
+        $Script:LogLevel = "None"
+    } else {
+        $LogPath = Split-Path -Path $Script:LogFile -Parent
+        if ([String]::IsNullOrEmpty($LogPath) -or ($LogPath -eq ".") -or ($LogPath -eq "\")) {
+            $Script:LogFile = Join-Path -Path ($Env:TEMP) -ChildPath (Split-Path -Path $Script:LogFile -Leaf)
+        }
+        $Script:LogLevel = "Debug"
+    }   
+    Write-ToLogFile -WriteHeader
+    Write-ToLogFile -I -C OTP4ADC-Encryption -M "Starting a new log"
+    $IsReady = $false
+    $SecretEncryptionCertificateThumbprint = $null
+    $DecryptionCertificateThumbprint = $null
+    switch ($SyncedVariables.EncryptionOperation) {
+        "0" { 
+            $SecretEncryptionCertificateThumbprint = $SyncHash.WPFControl_tbNewCertificateThumbprint.Text
+            Write-ToLogFile -I -C OTP4ADC-Encryption -M "Encryption Certificate Thumbprint: $SecretEncryptionCertificateThumbprint"
+            Break
+        }
+        "1" { 
+            $DecryptionCertificateThumbprint = $SyncHash.WPFControl_tbCurrentCertificateThumbprint.Text
+            Write-ToLogFile -I -C OTP4ADC-Encryption -M "Decryption Certificate Thumbprint: $DecryptionCertificateThumbprint"
+            Break
+        }
+        "2" { 
+            $DecryptionCertificateThumbprint = $SyncHash.WPFControl_tbCurrentCertificateThumbprint.Text
+            Write-ToLogFile -I -C OTP4ADC-Encryption -M "Decryption Certificate Thumbprint: $DecryptionCertificateThumbprint"
+            $SecretEncryptionCertificateThumbprint = $SyncHash.WPFControl_tbNewCertificateThumbprint.Text
+            Write-ToLogFile -I -C OTP4ADC-Encryption -M "Encryption Certificate Thumbprint: $SecretEncryptionCertificateThumbprint"
+            Break
+        }
+        Default {
+            Break
+        }
+    }
+ 
+    $SourceAttribute = $SyncHash.WPFControl_tbCurrentAttribute.Text
+    switch ($SyncedVariables.EncryptionOption) {
+        "0" { 
+            $TargetAttribute = $SourceAttribute
+            Write-ToLogFile -I -C OTP4ADC-Encryption -M "Save to same attribute. SourceAttribute:$SourceAttribute => TargetAttribute:$TargetAttribute"
+            Break
+        }
+        "1" { 
+            $TargetAttribute = $SyncHash.WPFControl_tbNewAttribute.Text
+            Write-ToLogFile -I -C OTP4ADC-Encryption -M "Save to different attribute."
+            Break
+        }
+        Default {
+            Break
+        }
+    }
+    Write-ToLogFile -I -C OTP4ADC-Encryption -M "SourceAttribute:$SourceAttribute => TargetAttribute:$TargetAttribute"
+    if ($SyncedVariables.EncryptionOperation -eq "0" -and [String]::IsNullOrEmpty($SecretEncryptionCertificateThumbprint) ) {
+        Write-ToLogFile -E -C OTP4ADC-Encryption -M "Please make sure a (new) certificate Thumbprint is configured!"
+        $null = [System.Windows.MessageBox]::Show("Please make sure a (new) certificate Thumbprint is configured!", "Encryption Operation", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+    } elseif ($SyncedVariables.EncryptionOperation -eq "1" -and [String]::IsNullOrEmpty($DecryptionCertificateThumbprint)) {
+        Write-ToLogFile -E -C OTP4ADC-Encryption -M "Please make sure a (current) certificate Thumbprint is configured!"
+        $null = [System.Windows.MessageBox]::Show("Please make sure a (current) certificate Thumbprint is configured!", "Encryption Operation", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+    } elseif ($SyncedVariables.EncryptionOperation -eq "2" -and [String]::IsNullOrEmpty($SecretEncryptionCertificateThumbprint)) {
+        Write-ToLogFile -E -C OTP4ADC-Encryption -M "Please make sure a (new) certificate Thumbprint is configured!"
+        $null = [System.Windows.MessageBox]::Show("Please make sure a (new) certificate Thumbprint is configured!", "Encryption Operation", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+    } elseif ($SyncedVariables.EncryptionOperation -eq "2" -and [String]::IsNullOrEmpty($DecryptionCertificateThumbprint)) {
+        Write-ToLogFile -E -C OTP4ADC-Encryption -M "Please make sure a (current) certificate Thumbprint is configured!"
+        $null = [System.Windows.MessageBox]::Show("Please make sure a (current) certificate Thumbprint is configured!", "Encryption Operation", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+    } elseif ($SyncedVariables.EncryptionOption -eq "0" -and [String]::IsNullOrEmpty($SourceAttribute)) {
+        Write-ToLogFile -E -C OTP4ADC-Encryption -M "Please make sure a (current) attribute is configured!"
+        $null = [System.Windows.MessageBox]::Show("Please make sure a (current) attribute is configured!", "Encryption Option", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+    } elseif ($SyncedVariables.EncryptionOption -eq "1" -and [String]::IsNullOrEmpty($SourceAttribute)) {
+        Write-ToLogFile -E -C OTP4ADC-Encryption -M "Please make sure a (current) attribute is configured!"
+        $null = [System.Windows.MessageBox]::Show("Please make sure a (current) attribute is configured!", "Encryption Option", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+    } elseif ($SyncedVariables.EncryptionOption -eq "1" -and [String]::IsNullOrEmpty($TargetAttribute)) {
+        Write-ToLogFile -E -C OTP4ADC-Encryption -M "Please make sure a (new) attribute is configured!"
+        $null = [System.Windows.MessageBox]::Show("Please make sure a (new) attribute is configured!", "Encryption Option", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+    } else {
+        $IsReady = $true
+    }
+    if (-Not $IsReady) {
+        Write-ToLogFile -E -C OTP4ADC-Encryption -M "Cannot continue, something not ready!"
+        $null = [System.Windows.MessageBox]::Show("Cannot continue, something not ready!", "Encryption", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+    } else {
+        $ADUsers = @(Get-AllUsersWithAttribute -Attribute $SourceAttribute -Credential $SyncedVariables.LDAPCredential -Server $SyncedVariables.Settings.LDAPSettings.LDAPServer -Port $SyncedVariables.Settings.LDAPSettings.LDAPPort -Attributes $TargetAttribute)
+        Write-ToLogFile -I -C OTP4ADC-Encryption -M "Ready to go! Got $($ADUsers.Count) Users"
+        $loopCounter = 0
+        $progress = 0
+        $success = 0
+        $failed = 0
+        foreach ($ADUser in $ADUsers) {
+            Write-ToLogFile -I -C OTP4ADC-Encryption -M "=====  $($ADUser.userprincipalname)  ====="
+            Write-ToLogFile -I -C OTP4ADC-Encryption -M "Processing new user"
+            $loopCounter++
+            $progress = [math]::Round($loopCounter / $ADUsers.count * 100)
+            try {
+                if (Test-ValidEncryptedJson $ADUser."$SourceAttribute") {
+                    Write-ToLogFile -I -C OTP4ADC-Encryption -M "Source Attribute: $SourceAttribute is Encrypted"
+                    $devices = ConvertFrom-EncryptedUserAttribute $ADUser."$SourceAttribute" -Thumbprint $DecryptionCertificateThumbprint
+                } elseif (Test-ValidClearTextSecret $ADUser."$SourceAttribute") {
+                    Write-ToLogFile -I -C OTP4ADC-Encryption -M "Source Attribute: $SourceAttribute is ClearText"
+                    $devices = ConvertFrom-ClearTextUserAttribute $ADUser."$SourceAttribute"
+                } else {
+                    Write-ToLogFile -W -C OTP4ADC-Encryption -M "Source Attribute: $SourceAttribute is UNKNOWN: $($ADUser."$SourceAttribute")"
+                    $devices = $false
+                }
+                Write-ToLogFile -D -C OTP4ADC-Encryption -M "Original Source Data: $($ADUser."$SourceAttribute")"
+                if ($devices) {
+                    switch ($SyncedVariables.EncryptionOperation) {
+                        "0" { 
+                            Write-ToLogFile -I -C OTP4ADC-Encryption -M "ClearText => Encrypted, Encrypting secret with Certificate: $SecretEncryptionCertificateThumbprint"
+                            if (Test-ValidClearTextSecret $ADUser."$SourceAttribute") {
+                                $devices = ConvertFrom-ClearTextUserAttribute $ADUser."$SourceAttribute"
+                                Write-ToLogFile -I -C OTP4ADC-Encryption -M "Got $($devices.Count) secret(s) for user `"$($ADUser.userprincipalname)`""
+                                $NewOTPString = ConvertTo-EncryptedUserAttribute -object $devices -Thumbprint $SecretEncryptionCertificateThumbprint
+                            } else {
+                                $NewOTPString = $false
+                            }
+                            Break
+                        }
+                        "1" { 
+                            Write-ToLogFile -I -C OTP4ADC-Encryption -M "Encrypted => ClearText, Decrypting secret with Certificate: $DecryptionCertificateThumbprint"
+                            if (Test-ValidEncryptedJson $ADUser."$SourceAttribute") {
+                                $devices = ConvertFrom-EncryptedUserAttribute $ADUser."$SourceAttribute" -Thumbprint $DecryptionCertificateThumbprint
+                                Write-ToLogFile -I -C OTP4ADC-Encryption -M "Got $($devices.Count) secret(s) for user `"$($ADUser.userprincipalname)`""
+                                $NewOTPString = ConvertTo-ClearTextUserAttribute -object $devices
+                            } else {
+                                $NewOTPString = $false
+                            }
+                            Break
+                        }
+                        "2" { 
+                            Write-ToLogFile -I -C OTP4ADC-Encryption -M "Replace certificate `"$DecryptionCertificateThumbprint`" with new Certificate `"$SecretEncryptionCertificateThumbprint`""
+                            if (Test-ValidEncryptedJson $ADUser."$SourceAttribute") {
+                                $devices = ConvertFrom-EncryptedUserAttribute $ADUser."$SourceAttribute" -Thumbprint $DecryptionCertificateThumbprint
+                                Write-ToLogFile -I -C OTP4ADC-Encryption -M "Got $($devices.Count) secret(s) for user `"$($ADUser.userprincipalname)`""
+                                $NewOTPString = ConvertTo-EncryptedUserAttribute -object $devices -Thumbprint $SecretEncryptionCertificateThumbprint
+                            } else {
+                                $NewOTPString = $false
+                            }
+                            Break
+                        }
+                        Default {
+                            $NewOTPString = $false
+                            Break
+                        }
+                    }
+                    Write-ToLogFile -I -C OTP4ADC-Encryption -M "Writing new info to Target Attribute: $TargetAttribute"
+                    if ($NewOTPString) {
+                        $Params = @{
+                            DistinguishedName = $ADUser.distinguishedname
+                            Attribute         = $TargetAttribute
+                            NewValue          = $NewOTPString
+                            Server            = $SyncedVariables.Settings.LDAPSettings.LDAPServer
+                            Port              = $SyncedVariables.Settings.LDAPSettings.LDAPPort
+                            Credential        = $SyncedVariables.LDAPCredential
+                        }
+                        Set-AdsiADUser @Params
+                        #Write-ToLogFile -I -C OTP4ADC-Encryption -M "$($Params | Out-String)"
+                        Write-ToLogFile -I -C OTP4ADC-Encryption -M "Conversion Successful!"
+                        $success++
+                    } else {
+                        Write-ToLogFile -I -C OTP4ADC-Encryption -M "No new value for attribute!"
+                        $failed++
+                    }
+                } else {
+                    Write-ToLogFile -E -C OTP4ADC-Encryption -M "No (valid) secret(s) found for user `"$($ADUser.userprincipalname)`""
+                    Write-ToLogFile -D -C OTP4ADC-Encryption -M "RawData: $($ADUser."$SourceAttribute")"
+                    $failed++
+                }
+            } catch {
+                Write-ToLogFile -E -C OTP4ADC-Encryption -M "Caught an error, $($_.Exception.Message)"
+                $failed++
+            }
+            $SyncHash.WPFControl_tbConversionStatus.Text = '{0}% / Success:{1} / Failed:{2}' -f $progress, $success, $failed
+            $SyncHash.WPFControl_pbConversionStatus.Value = $progress
+            Update-GUI
+        }
+        Write-ToLogFile -I -C OTP4ADC-Encryption -M "===================="
+        Write-ToLogFile -I -C OTP4ADC-Encryption -M "Total   :$($ADUsers.count)"
+        Write-ToLogFile -I -C OTP4ADC-Encryption -M "Success :$success"
+        Write-ToLogFile -I -C OTP4ADC-Encryption -M "Failed  :$failed"
+        Write-ToLogFile -I -C OTP4ADC-Encryption -M "===================="
+    }
+
+    if (-Not [String]::IsNullOrEmpty($SecretEncryptionCertificateThumbprint)) {
+        $result = [System.Windows.MessageBox]::Show("Do you want to use the new certificate thumbprint as default?", "New default", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
+        Write-ToLogFile -I -C OTP4ADC-Encryption -M "Do you want to use the new certificate thumbprint as default? => $result"
+        if ($result -eq "Yes") {
+            $SyncedVariables.Settings.LDAPSettings.EncryptionCertificateThumbprint = $SecretEncryptionCertificateThumbprint
+            $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = $SecretEncryptionCertificateThumbprint
+            $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsChecked = $true
+            $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled = $true
+        }
+    }
+    Write-ToLogFile -I -C OTP4ADC-Encryption -M "Conversion Finished!"
+    $Script:LogLevel = "None"
+    $SyncHash.WPFControl_btnConversionStart.IsEnabled = $true
+    Write-Verbose "Ending function   : Invoke-StartEncryption"
+}
 function ConvertFrom-HashTable {
     [CmdletBinding()]
     param(
+        [Parameter(ValueFromPipeline)]
         [HashTable]$Collection
     )
     $Object = New-Object PSObject
     foreach ($key in $Collection.keys) {
         $Object | Add-Member -MemberType NoteProperty -Name $key -Value ($Collection.$Key | ForEach-Object { $_ })
     }
-    return $Object
+    Write-Output $Object
 }
 
-#endregion Alternative AD Functions
-
+#endregion Encryption
 
 #endregion functions
 
@@ -1127,7 +2708,21 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
     Write-Verbose "Running CommandLine mode!"
     $SyncedVariables = [hashtable]::Synchronized(@{ })
     $SyncedVariables.IsGUI = $false
-    Invoke-LoadModulesCL    
+    Import-ModulesCommandLine
+    if ((-not [String]::IsNullOrEmpty($Thumbprint)) -and ($PSVersionTable.PSVersion -lt [Version]"7.1.0")) {
+        Throw "Encryption is NOT possible, PoSH version is lower than 7.1.0 ($($PSVersionTable.PSVersion))"
+    } elseif (-not [String]::IsNullOrEmpty($Thumbprint)) {
+        Write-Verbose "A Thumbprint was provided, saving secrets encrypted."
+    }
+    try {
+        New-Item -Path $ExportPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    } catch {
+        Throw "Could not create the path specified `"$ExportPath`""
+    }
+    if (-Not (Test-Path -Path $ExportPath)) {
+        Throw "Could not find the path specified `"$ExportPath`""
+    }
+    Write-Verbose "Export Path `"$ExportPath`" configured."
     $Output = [PSCustomObject]@{
         UserPrincipalName = $null
         NewSecret         = $null
@@ -1150,7 +2745,7 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
     } else {
         Throw "No user was found!"
     }
-
+    
     if ($ADUser.Count -gt 1) {
         Write-Host "Multiple accounts found, please select only one!"
         $ADUser | ForEach-Object {
@@ -1163,7 +2758,23 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
 
     $DeviceSecrets = @()
     if (-Not $ReplaceTokens) {
-        $DeviceSecrets += ConvertFrom-Attribute -Data $ADUser.Attribute
+        if (Test-ValidEncryptedJson $ADUser.Attribute) {
+            Write-Verbose "Source Attribute: $Attribute is Encrypted"
+            if ([String]::IsNullOrEmpty($Thumbprint)) {
+                Throw "Source attribute `"$Attribute`" contains an encrypted token, please specify correct certificate Thumbprint!"
+            }
+            try {
+                $DeviceSecrets += ConvertFrom-EncryptedUserAttribute $ADUser.Attribute -Thumbprint $Thumbprint
+            } catch {
+                Throw "Certificate thumbprint `"$Thumbprint`" possibly not valid!"
+            }
+        } elseif (Test-ValidClearTextSecret $ADUser.Attribute) {
+            Write-Verbose "Source Attribute: $Attribute is ClearText"
+            $DeviceSecrets += ConvertFrom-ClearTextUserAttribute $ADUser.Attribute
+        } else {
+            Write-Verbose "Source Attribute: $Attribute is UNKNOWN: $($ADUser.Attribute)"
+            $DeviceSecrets = @()
+        }
     } else {
         Write-Verbose "ReplaceTokens was specified, overwriting all Tokens for user!"
     }
@@ -1217,12 +2828,13 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
     }
     try {
         $DistinguishedName = $ADUser.DistinguishedName
+        Write-Verbose "User: $DistinguishedName"
         if ($DeviceSecrets.Count -gt 0) {
-            $NewOTP = @()
-            ForEach ($Item in $DeviceSecrets) {
-                $NewOTP += "{0}={1}" -f $Item.DeviceName, $Item.Secret
+            if ([String]::IsNullOrEmpty($Thumbprint)) {
+                $NewOTPString = ConvertTo-ClearTextUserAttribute -object $DeviceSecrets
+            } else {
+                $NewOTPString = ConvertTo-EncryptedUserAttribute -object $DeviceSecrets -Thumbprint $Thumbprint
             }
-            $NewOTPString = "#@$($NewOTP -Join '&,')&,"
             Write-Verbose "New OTP AD User String: `"$NewOTPString`""
             Set-ADUser -Identity $DistinguishedName -Replace @{ "$Attribute" = $NewOTPString } -ErrorAction Stop
         } else {
@@ -1230,7 +2842,6 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
             $NewOTPString = $null
             Set-ADUser -Identity $DistinguishedName -Clear @("$Attribute") -ErrorAction Stop
         }
-  
     } catch {
         $Output.NewSecret = $null
         Write-Output $Output
@@ -1240,6 +2851,7 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
         $PNGFileName = Join-Path -Path $ExportPath -ChildPath "$($ADUser.UserPrincipalName)_$($DeviceName).png"
         Write-Verbose "Exporting QR code to `"$PNGFileName`""
         [System.IO.File]::WriteAllBytes($PNGFileName, $($QRImage.ToArray()))
+        $Output.QRFileName = $PNGFileName
     } catch {
         Write-Output $Output
         Throw "Error while exporting the QR Image, $($_.Exception.Message)"
@@ -1271,6 +2883,7 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
 
     $SyncHash = [hashtable]::Synchronized(@{ })
     $SyncedVariables = [hashtable]::Synchronized(@{ })
+    $Script:LogLevel = "None"
 
     $SyncedVariables.Settings = [PSCustomObject]@{
         AppVersion   = $AppVersion
@@ -1278,12 +2891,13 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
         TokenText    = $TokenText
         QRSize       = $QRSize
         LDAPSettings = [PSCustomObject]@{
-            LDAPServer             = $null
-            LDAPPort               = $null
-            LDAPUsername           = $null
-            LDAPPassword           = $null
-            LDAPAttribute          = $Attribute
-            LDAPAlternativeModules = $false
+            LDAPServer                                 = $null
+            LDAPPort                                   = $null
+            LDAPUsername                               = $null
+            LDAPPassword                               = $null
+            LDAPAttribute                              = $Attribute
+            LDAPNativeFunctions                        = $false
+            LDAPTokenSecretEncryptionCertificateSource = "Store" #Values: Store, PEM
         }
     }
     $SyncedVariables.IsGUI = $true
@@ -1335,217 +2949,285 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
 
     $InputXML = @"
 <Window x:Class="OTP4ADC.MainWindow"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    xmlns:local="clr-namespace:OTP4ADC"
-    mc:Ignorable="d" 
-    Title="OTP4ADC" SizeToContent="WidthAndHeight" ResizeMode="NoResize" Height="Auto" Width="Auto" WindowStartupLocation="CenterOwner">
-<Grid Margin="2" >
-    <TabControl >
-        <TabItem Header="OTP">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <GroupBox Name="gbUser" Grid.Row="0" Grid.Column="0" Grid.RowSpan="2" Header="User" Height="Auto" Margin="2" Width="Auto">
-                    <Grid Margin="3">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Label Name="lblUsername" Grid.Row="0" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Username" />
-                        <TextBox Name="tbUsername" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the Username or part of the username" TabIndex="10" />
-                        <Button Name="btnSearch" Grid.Row="0" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Search" Width="100" Height="Auto" TabIndex="20" ToolTip="Search for user" />
-                        <ListView Name="lvUsernames" Grid.Row="1" Grid.Column="1" Grid.RowSpan="2" VerticalContentAlignment="Top" Margin="2" Height="150" Width="320" FontSize="8" SelectionMode="Single" TabIndex="30" >
-                            <ListView.View>
-                                <GridView>
-                                    <GridViewColumn Header="SamAccountName" DisplayMemberBinding="{Binding SamAccountName}" Width="70"/>
-                                    <GridViewColumn Header="UPN" DisplayMemberBinding="{Binding UserPrincipalName}" Width="140"/>
-                                    <GridViewColumn Header="GivenName" DisplayMemberBinding="{Binding GivenName}" Width="50"/>
-                                    <GridViewColumn Header="Surname" DisplayMemberBinding="{Binding Surname}" Width="50"/>
-                                </GridView>
-                            </ListView.View>
-                        </ListView>
-                        <Button Name="btnClear" Grid.Row="1" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Clear" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Clear all settings"  />
-                        <Label Name="lblAttribute" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Top" Margin="2" Content="Attribute" Width="90" />
-                        <TextBox Name="tbAttribute" Grid.Row="3" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Can be pre-configured by starting the application with the -Attribute '&lt;AD Attribute&gt;' parameter, if not configured it uses the default 'userParameters'" />
-                        <Label Name="lblOtp" Grid.Row="4" Grid.Column="0" VerticalContentAlignment="Top" Margin="2" Content="OTP" Width="90"  VerticalAlignment="Top"/>
-                        <ListView Name="lvOtps" Grid.Row="4" Grid.Column="1" Grid.RowSpan="3" VerticalContentAlignment="Top" Margin="2"  Width="320" FontSize="10" SelectionMode="Single" TabIndex="40" Height="100"  >
-                            <ListView.View>
-                                <GridView>
-                                <GridViewColumn Header="Device Name" DisplayMemberBinding="{Binding DeviceName}" Width="100"/>
-                                <GridViewColumn Header="Secret" DisplayMemberBinding="{Binding Secret}" Width="210"/>
-                            </GridView>
-                            </ListView.View>
-                        </ListView>
-                        <StackPanel Grid.Row="4" Grid.Column="2" Grid.RowSpan="3" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="0">
-                            <Button Name="btnDeleteOtpSecret" VerticalContentAlignment="Center" Margin="2" Content="Delete" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Delete the selected secret" />
-                            <Button Name="btnSaveOtp" VerticalContentAlignment="Center" Margin="2" Content="Save" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Save the current secret(s) to the user account" />
-                            <Button Name="btnExportPosh" VerticalContentAlignment="Center" Margin="2" Content="Export PoSH" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Export the PowerShell command to make the necessary changes." />
-                        </StackPanel>
-                    </Grid>
-                </GroupBox>
-                <GroupBox Grid.Row="0" Grid.Column="1" Grid.RowSpan="2" Header="QR" Height="Auto" Margin="2" Width="Auto">
-                    <Grid Margin="3">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Label Name="lbTokenUserText" Grid.Row="0" Grid.Column="0" Margin="2" Content="" VerticalAlignment="Center" HorizontalContentAlignment="left" VerticalContentAlignment="Center" Width="200" Visibility="Visible" FontWeight="Bold" FontSize="8" />
-                        <Image Name="ImgQR" Grid.Row="1" Grid.Column="0" Margin="2" Height="200" Width="200" Visibility="Visible" Stretch="UniformToFill" RenderTransformOrigin="0.5,0.5" />
-                        <Label Name="lblQR" Grid.Row="2" Grid.Column="0" Margin="2" Content="" VerticalAlignment="Bottom" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Visibility="Visible" FontWeight="Bold" FontSize="14"/>
-                        <Button Name="btnExportQR" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="Export QR" Width="100" VerticalAlignment="Bottom" Height="27" TabIndex="100" ToolTip="Export and save the QR code" />
-                    </Grid>
-                </GroupBox>
-                <GroupBox Grid.Row="2" Grid.Column="0" Grid.RowSpan="2" Header="OTP Secret" Height="Auto" Margin="2" Width="Auto">
-                    <Grid Margin="3">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Label Name="lblSecret" Grid.Row="0" Grid.Column="0" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Secret" />
-                        <TextBox Name="tbSecret" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" IsReadOnly="True" />
-                        <Button Name="btnGenerateSecret" Grid.Row="0" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Generate Secret" Width="100" TabIndex="60" ToolTip="Generate a new secret" />
-                        <Label Name="lblDeviceName" Grid.Row="1" Grid.Column="0" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Device Name" />
-                        <TextBox Name="tbDeviceName" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" TabIndex="70" />
-                        <Button Name="btnAddQR" Grid.Row="1" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Add" Width="100" ToolTip="Add the generated secret to the user account" />
-                        <Label Name="lblGateway" Grid.Row="2" Grid.Column="0" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Gateway fqdn" />
-                        <TextBox Name="tbGateway" Grid.Row="2" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Can be pre-configured by starting the application with the -GatewayUri '&lt;gw.domain.com&gt;' parameter" TabIndex="80" />
-                        <Button Name="btnGenerateQR" Grid.Row="2" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Generate QR" Width="100" VerticalAlignment="Top" Height="27" TabIndex="90" ToolTip="Generate a QR code" />
-                        <Label Name="lblTokenDisplayText" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Token Text" />
-                        <StackPanel Name="gbTokenText" Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="3" Margin="2" ToolTip="Select a text format for the Authenticator App" IsEnabled="true">
-                            <RadioButton Name="rbTokenTextOption1" Content = '[1] username@domain.corp'/>
-                            <RadioButton Name="rbTokenTextOption2" Content = '[2] username@gateway.domain.com' IsChecked="True"/>
-                            <RadioButton Name="rbTokenTextOption3" Content = '[3] username@domain.corp@gateway.domain.com'/>
-                        </StackPanel>
-                    </Grid>
-                </GroupBox>
-                <GroupBox Name="gbToken" Grid.Row="2" Grid.Column="1" Header="Token" Height="Auto" Margin="2" Width="Auto" IsEnabled="False">
-                    <Grid Margin="3">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition />
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBox Name="tbTOTPToken" Grid.Row="0" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Text="------" Width="Auto" IsReadOnly="True" HorizontalContentAlignment="Center" FontSize="20" FontFamily="Lucida Console" ToolTip="Token code will be copied to the clipboard" />
-                        <Button Name="btnViewTOTPToken" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Content="View Token" Width="100" Height="27" ToolTip="Click to generate a token code" />
-                        <ProgressBar Name="pbTOTPToken" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Height="5" Margin="2"/>
-                    </Grid>
-                </GroupBox>
-                <Image Name="AppImage"  Grid.Column="1"  Grid.Row="3" HorizontalAlignment="Right" Height="100" VerticalAlignment="Bottom" Width="100"/>
-            </Grid>
-        </TabItem>
-        <TabItem Header="Settings">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Row="0" Grid.Column="2" Grid.RowSpan="3" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="0,10,0,0">
-                    <Button Name="btnSaveSettings" VerticalContentAlignment="Center" Height="27" Margin="2" Content="Save" Width="100" TabIndex="300" ToolTip="Search for user" VerticalAlignment="Top"/>
-                    <Button Name="btnTestSettings" VerticalContentAlignment="Center" Height="27" Margin="2" Content="Test" Width="100" TabIndex="300" ToolTip="Test and validate the settings" VerticalAlignment="Top"/>
-                </StackPanel>
-                
-                <GroupBox Name="gbGeneral" Grid.Row="0" Grid.Column="0" Header="General Settings" Height="Auto" Margin="2" Width="Auto" IsEnabled="True">
-                    <Grid Margin="3">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Label Name="lblGatewayURI" Grid.Row="0" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Gateway URI" />
-                        <TextBox Name="tbGatewayURI" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the Gateway URI / Address" TabIndex="10" />
-                        <Label Name="lblQRSize" Grid.Row="1" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="QR Size" />
-                        <TextBox Name="tbQRSize" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the QR Image size (default 300x300)" TabIndex="20" />
-                    </Grid>
-                </GroupBox>
-                <GroupBox Name="gbLDAP" Grid.Row="1" Grid.Column="0" Header="LDAP Settings" Height="Auto" Margin="2" Width="Auto" IsEnabled="True" >
-                    <Grid Margin="3">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Label Name="lblLDAPServer" Grid.Row="0" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Server" />
-                        <TextBox Name="tbLDAPServer" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP server fqdn, ip address or domain fqdn. Leave empty for default value." TabIndex="100" />
-                        <Label Name="lblLDAPPort" Grid.Row="1" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Port" />
-                        <TextBox Name="tbLDAPPort" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP server port, 0 for default. E.g. 636" TabIndex="100" />
-                        <Label Name="lblLDAPUsername" Grid.Row="2" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Username" />
-                        <TextBox Name="tbLDAPUsername" Grid.Row="2" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP username with the required permissions" TabIndex="120" />
-                        <Label Name="lblLDAPPassword" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Password" />
-                        <PasswordBox Name="pbLDAPPassword" Grid.Row="3" Grid.Column="1" VerticalContentAlignment="Center" Password="" Margin="2" Width="320" ToolTip="Enter the LDAP password for the username" TabIndex="130" />
-                        <Label Name="lblLDAPAttribute" Grid.Row="4" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Attribute" />
-                        <TextBox Name="tbLDAPAttribute" Grid.Row="4" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP attribute name for storing the OTP seed" TabIndex="140" />
-                        <Label Name="lblLDAPAlternativeModule" Grid.Row="5" Grid.Column="0" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Alt. Module" />
-                        <CheckBox Name="cbLDAPAlternativeModule" Grid.Row="5" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Content="Experimental option!" ToolTip="When checked the PowerShell module 'ActiveDirectory' will not be used, but an alternative." TabIndex="150"/>
-                    </Grid>
-                </GroupBox>
-            </Grid>
-        </TabItem>
-    </TabControl>
-</Grid>
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:OTP4ADC"
+        mc:Ignorable="d" 
+        Title="OTP4ADC" SizeToContent="WidthAndHeight" ResizeMode="NoResize" Height="Auto" Width="Auto" WindowStartupLocation="CenterOwner">
+    <Grid Margin="2" >
+        <TabControl >
+            <TabItem Header="OTP">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <GroupBox Name="gbUser" Grid.Row="0" Grid.Column="0" Grid.RowSpan="2" Header="User" Height="Auto" Margin="2" Width="Auto">
+                        <Grid Margin="3">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="135"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Label Name="lblUsername" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Username" />
+                            <TextBox Name="tbUsername" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the Username or part of the username" TabIndex="10" />
+                            <Button Name="btnSearch" Grid.Row="0" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Search" Width="100" Height="Auto" TabIndex="20" ToolTip="Search for user" />
+                            <ListView Name="lvUsernames" Grid.Row="1" Grid.Column="1" Grid.RowSpan="2" VerticalContentAlignment="Top" Margin="2" Height="150" Width="320" FontSize="8" SelectionMode="Single" TabIndex="30" >
+                                <ListView.View>
+                                    <GridView>
+                                        <GridViewColumn Header="SamAccountName" DisplayMemberBinding="{Binding SamAccountName}" Width="70"/>
+                                        <GridViewColumn Header="UPN" DisplayMemberBinding="{Binding UserPrincipalName}" Width="140"/>
+                                        <GridViewColumn Header="GivenName" DisplayMemberBinding="{Binding GivenName}" Width="50"/>
+                                        <GridViewColumn Header="Surname" DisplayMemberBinding="{Binding Surname}" Width="50"/>
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
+                            <Button Name="btnClear" Grid.Row="1" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Clear" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Clear all settings"  />
+                            <Label Name="lblAttribute" Grid.Row="3" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Top" Margin="2" Content="User Attribute" Width="90" />
+                            <TextBox Name="tbAttribute" Grid.Row="3" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Can be pre-configured by starting the application with the -Attribute '&lt;AD Attribute&gt;' parameter, if not configured it uses the default 'userParameters'" />
+                            <Label Name="lblOtp" Grid.Row="4" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Top" Margin="2" Content="OTP Secrets" Width="90"  VerticalAlignment="Top"/>
+                            <ListView Name="lvOtps" Grid.Row="4" Grid.Column="1" Grid.RowSpan="3" VerticalContentAlignment="Top" Margin="2"  Width="320" FontSize="10" SelectionMode="Single" TabIndex="40" Height="100"  >
+                                <ListView.View>
+                                    <GridView>
+                                        <GridViewColumn Header="Device Name" DisplayMemberBinding="{Binding DeviceName}" Width="100"/>
+                                        <GridViewColumn Header="Secret" DisplayMemberBinding="{Binding Secret}" Width="210"/>
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
+                            <StackPanel Grid.Row="4" Grid.Column="2" Grid.RowSpan="3" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="0">
+                                <Button Name="btnDeleteOtpSecret" VerticalContentAlignment="Center" Margin="2" Content="Delete" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Delete the selected secret" />
+                                <Button Name="btnSaveOtp" VerticalContentAlignment="Center" Margin="2" Content="Save" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Save the current secret(s) to the user account" />
+                                <Button Name="btnExportPosh" VerticalContentAlignment="Center" Margin="2" Content="Export PoSH" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Export the PowerShell command to make the necessary changes." />
+                            </StackPanel>
+                        </Grid>
+                    </GroupBox>
+                    <GroupBox Grid.Row="0" Grid.Column="1" Grid.RowSpan="2" Header="QR" Height="Auto" Margin="2" Width="Auto">
+                        <Grid Margin="3">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Label Name="lbTokenUserText" Grid.Row="0" Grid.Column="0" Margin="2" Content="" VerticalAlignment="Center" HorizontalContentAlignment="left" VerticalContentAlignment="Center" Width="200" Visibility="Visible" FontWeight="Bold" FontSize="8" />
+                            <Image Name="ImgQR" Grid.Row="1" Grid.Column="0" Margin="2" Height="200" Width="200" Visibility="Visible" Stretch="UniformToFill" RenderTransformOrigin="0.5,0.5" />
+                            <Label Name="lblQR" Grid.Row="2" Grid.Column="0" Margin="2" Content="" VerticalAlignment="Bottom" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Visibility="Visible" FontWeight="Bold" FontSize="14"/>
+                            <Button Name="btnExportQR" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="Export QR" Width="100" VerticalAlignment="Bottom" Height="27" TabIndex="100" ToolTip="Export and save the QR code" />
+                        </Grid>
+                    </GroupBox>
+                    <GroupBox Grid.Row="2" Grid.Column="0" Grid.RowSpan="2" Header="OTP Secret" Height="Auto" Margin="2" Width="Auto">
+                        <Grid Margin="3">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="135"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Label Name="lblSecret" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Secret" />
+                            <TextBox Name="tbSecret" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" IsReadOnly="True" />
+                            <Button Name="btnGenerateSecret" Grid.Row="0" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Generate Secret" Width="100" TabIndex="60" ToolTip="Generate a new secret" />
+                            <Label Name="lblDeviceName" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Device Name" />
+                            <TextBox Name="tbDeviceName" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" TabIndex="70" />
+                            <Button Name="btnAddQR" Grid.Row="1" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Add" Width="100" ToolTip="Add the generated secret to the user account" />
+                            <Label Name="lblGateway" Grid.Row="2" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Gateway FQDN" />
+                            <TextBox Name="tbGateway" Grid.Row="2" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Can be pre-configured by starting the application with the -GatewayUri '&lt;gw.domain.com&gt;' parameter" TabIndex="80" />
+                            <Button Name="btnGenerateQR" Grid.Row="2" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Generate QR" Width="100" VerticalAlignment="Top" Height="27" TabIndex="90" ToolTip="Generate a QR code" />
+                            <Label Name="lblTokenDisplayText" Grid.Row="3" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Token Text" />
+                            <StackPanel Name="spTokenText" Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="3" Margin="2" ToolTip="Select a text format for the Authenticator App" IsEnabled="true">
+                                <RadioButton Name="rbTokenTextOption1" Content = '[1] username@domain.corp'/>
+                                <RadioButton Name="rbTokenTextOption2" Content = '[2] username@gateway.domain.com' IsChecked="True"/>
+                                <RadioButton Name="rbTokenTextOption3" Content = '[3] username@domain.corp@gateway.domain.com'/>
+                            </StackPanel>
+                        </Grid>
+                    </GroupBox>
+                    <GroupBox Name="gbToken" Grid.Row="2" Grid.Column="1" Header="Token" Height="Auto" Margin="2" Width="Auto" IsEnabled="False">
+                        <Grid Margin="3">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition />
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox Name="tbTOTPToken" Grid.Row="0" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Text="------" Width="Auto" IsReadOnly="True" HorizontalContentAlignment="Center" FontSize="20" FontFamily="Lucida Console" ToolTip="Token code will be copied to the clipboard" />
+                            <Button Name="btnViewTOTPToken" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Content="View Token" Width="100" Height="27" ToolTip="Click to generate a token code" />
+                            <ProgressBar Name="pbTOTPToken" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Height="5" Margin="2"/>
+                        </Grid>
+                    </GroupBox>
+                    <Image Name="AppImage"  Grid.Column="1"  Grid.Row="3" HorizontalAlignment="Right" Height="100" VerticalAlignment="Bottom" Width="100"/>
+                </Grid>
+            </TabItem>
+            <TabItem Header="Settings">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Row="0" Grid.Column="2" Grid.RowSpan="3" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="0,10,0,0">
+                        <Button Name="btnSaveSettings" VerticalContentAlignment="Center" Height="27" Margin="2" Content="Save" Width="100" TabIndex="300" ToolTip="Search for user" VerticalAlignment="Top"/>
+                        <Button Name="btnTestSettings" VerticalContentAlignment="Center" Height="27" Margin="2" Content="Test" Width="100" TabIndex="300" ToolTip="Test and validate the settings" VerticalAlignment="Top"/>
+                    </StackPanel>
+
+                    <GroupBox Name="gbGeneral" Grid.Row="0" Grid.Column="0" Header="General Settings" Height="Auto" Margin="2" Width="Auto" IsEnabled="True">
+                        <Grid Margin="3,6,3,3">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="135"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Label Name="lblGatewayURI" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="Gateway URI FQDN" />
+                            <TextBox Name="tbGatewayURI" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the Gateway URI / Address" TabIndex="10" />
+                            <Label Name="lblQRSize" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="QR Image Size" />
+                            <TextBox Name="tbQRSize" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the QR Image size (default 300x300)" TabIndex="20" />
+                        </Grid>
+                    </GroupBox>
+                    <GroupBox Name="gbLDAP" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Header="LDAP Settings" Height="Auto" Margin="2" Width="Auto" IsEnabled="True" >
+                        <Grid Margin="3,6,3,3">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="135"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="100"/>
+                            </Grid.ColumnDefinitions>
+                            <Label Name="lblLDAPAlternativeModule" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="Native AD" />
+                            <CheckBox Name="cbLDAPAlternativeModule" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Content="Experimental option!" ToolTip="When checked the PowerShell module 'ActiveDirectory' will not be used, but an alternative option (ADSI)." TabIndex="100"/>
+                            <Label Name="lblLDAPServer" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="LDAP Server FQDN" />
+                            <TextBox Name="tbLDAPServer" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP server fqdn, ip address or domain fqdn. Leave empty for default value." TabIndex="110" />
+                            <Label Name="lblLDAPPort" Grid.Row="2" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="LDAP Server Port" />
+                            <TextBox Name="tbLDAPPort" Grid.Row="2" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP server port, 0 for default. E.g. 636" TabIndex="120" />
+                            <Label Name="lblLDAPUsername" Grid.Row="3" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="LDAP Username" />
+                            <TextBox Name="tbLDAPUsername" Grid.Row="3" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP username with the required permissions" TabIndex="130" />
+                            <Label Name="lblLDAPPassword" Grid.Row="4" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="LDAP Password" />
+                            <PasswordBox Name="pbLDAPPassword" Grid.Row="4" Grid.Column="1" VerticalContentAlignment="Center" Password="" Margin="2" Width="320" ToolTip="Enter the LDAP password for the username" TabIndex="140" />
+                            <Label Name="lblLDAPAttribute" Grid.Row="5" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="User Attribute" />
+                            <TextBox Name="tbLDAPAttribute" Grid.Row="5" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP attribute name for storing the OTP seed" TabIndex="150" />
+                            <Label Name="lblLDAPSecretEncryptionEnabled" Grid.Row="6" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="Secret Encryption" />
+                            <CheckBox Name="cbLDAPSecretEncryptionEnabled" Grid.Row="6" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Content="Enabled" ToolTip="Check if you want to use encrypted token secrets" TabIndex="160"/>
+                            <Label Name="lblSecretEncryptionCertificateThumbprint" Grid.Row="7" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Margin="2" Content="Certificate Thumbprint" />
+                            <TextBox Name="tbSecretEncryptionCertificateThumbprint" Grid.Row="7"  Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" TabIndex="170" ToolTip="Certificate thumbprint to decrypt the secret" />
+                        </Grid>
+                    </GroupBox>
+                </Grid>
+            </TabItem>
+            <TabItem Name ="tiEncryption" Header="Encryption" Visibility="Visible">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <GroupBox Name="gbEncryption" Grid.Row="2" Grid.Column="0" Header="Encryption" Height="Auto" Margin="2" Width="Auto" IsEnabled="True">
+                        <Grid Margin="3">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="30"/>
+                                <RowDefinition Height="30"/>
+                                <RowDefinition Height="30"/>
+                                <RowDefinition Height="30"/>
+                                <RowDefinition Height="30"/>
+                                <RowDefinition Height="30"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="320"/>
+                                <ColumnDefinition Width="100"/>
+                            </Grid.ColumnDefinitions>
+                            <Label Name="lblEncryptionOperation" Grid.Row="0" Grid.Column="0" VerticalContentAlignment="Top" Margin="2" Content="Attribute operation" Grid.ColumnSpan="2"/>
+                            <StackPanel Name="spEncryptionOperation" Grid.Row="0" Grid.Column="2" Margin="2" >
+                                <RadioButton Name="rbEncryptionOperation0" TabIndex="11" Content = 'Convert plaintext OTP secret to encrypted format'/>
+                                <RadioButton Name="rbEncryptionOperation1" TabIndex="11" Content = 'Convert the encrypted OTP secrets back to plaintext'/>
+                                <RadioButton Name="rbEncryptionOperation2" TabIndex="11" Content = 'Update the certificate to a new certificate'/>
+                            </StackPanel>
+                            <Label Name="lblEncryptionOption" Grid.Row="1" Grid.Column="0" Margin="2" Content="Attribute option" Grid.ColumnSpan="2"/>
+                            <StackPanel Name="spEncryptionOption" Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Margin="2">
+                                <RadioButton Name="rbEncryptionOption0" TabIndex="21" Content = 'Save to same attribute'/>
+                                <RadioButton Name="rbEncryptionOption1" TabIndex="21" Content = 'Save to different attribute'/>
+                            </StackPanel>
+                            <Label Name="lblCurrentAttribute" Grid.Row="2" Grid.Column="0" VerticalContentAlignment="Top" Margin="2" Content="Current Attribute" Grid.ColumnSpan="2"/>
+                            <TextBox Name="tbCurrentAttribute" Grid.Row="2" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Text="" TabIndex="31" ToolTip="Enter the attribute name where the OTP secret is currently stored"  />
+                            <Label Name="lblNewAttribute" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Top" Margin="2" Content="New Attribute" Grid.ColumnSpan="2"/>
+                            <TextBox Name="tbNewAttribute" Grid.Row="3" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Text="" TabIndex="41" ToolTip="Enter the attribute name where the converted OTP secret will be saved to" />
+                            <Label Name="lblCurrentCertificateThumbprint" Grid.Row="4" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="Current Certificate" Grid.ColumnSpan="2" />
+                            <TextBox Name="tbCurrentCertificateThumbprint" Grid.Row="4"  Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Text="" TabIndex="51" ToolTip="Current certificate thumbprint to decrypt the secret with" />
+                            <Label Name="lblNewCertificateThumbprint" Grid.Row="5" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="New Certificate" Grid.ColumnSpan="2" />
+                            <TextBox Name="tbNewCertificateThumbprint" Grid.Row="5"  Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Text="" TabIndex="61" ToolTip="New certificate thumbprint to encrypt the secret with" />
+                            <Label Name="lblLogPath" Grid.Row="6" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="Log File" Grid.ColumnSpan="2" />
+                            <TextBox Name="tbLogPathPath" Grid.Row="6"  Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Text="" IsReadOnly="True" TabIndex="71" ToolTip="Logfile for the actions" />
+                            <Button Name="btnLogPathPath" Grid.Row="6"  Grid.Column="3" VerticalContentAlignment="Center" Margin="2" Content="Browse" TabIndex="72" ToolTip="Select a logfile location" />
+                            <Label Name="lblConversionStatus" Grid.Row="7" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="Progress" Grid.ColumnSpan="2" />
+                            <Grid Grid.Row="7"  Grid.Column="2" Margin="2" ToolTip="Conversion progress" >
+                                <ProgressBar Name="pbConversionStatus" Minimum="0" Maximum="100" Height="15" Value="0" />
+                                <TextBlock Name="tbConversionStatus" Text="0% | Success:0 | Failed:0" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Grid>
+                            <Button Name="btnConversionStart" Grid.Row="7"  Grid.Column="3" VerticalContentAlignment="Center" Margin="2" Content="Convert" TabIndex="81" ToolTip="Start the conversion"/>
+                        </Grid>
+                    </GroupBox>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </Grid>
 </Window>
 "@
-
     $AppImageB64 = @"
 iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAA9sSURBVHhe7Z1biBxFGIWjxqgEdOM9Iogo8UXQPHgBRRBBFJHkQRGMEbzgGmJAUBBvSzQiaNCNBmMQFQmaoBgC5kUx6Isv7kNIEKISFWMIiCISFTXeVs50wd89e/7qqZmumdnZ88F5mr+rq2v6m12qq7vnTQshXCSIEBEkiBARJIgQESSIEBEkiBARJIgQESSIEBEkiBARJIgQESSIEBEkiBARJIgQESSIEBEkiBARJIgQESSIEBEkiBARJIgQESSIEBEkiBARJIgQESSIEBEkiBARsguyZs2a6auuumroMzExEXpcZWpqitbPpuzbty8cTWdgLFg7wxacW7nJLggOZN68eUOfm2++OfS4ygcffEDrZ1M+/fTTcDSdgbFg7QxbcG7lRoKESBBDghgSJESCGBLEkCAhEsSQIIYECZEghgQxBibIY489Nv3ee+/1PatXr6b9SRVkyZIltP1NmzbR+rGxMVr/7rvv0noEn7Ft0Bar99KUIBg71p/cwbnC+jPSguDAB8Err7xC+5MqyKWXXhoqqnzxxRe0/owzzggVVf744w9aj+AzBtpi9V6aEgRjNwhwrrD+SJAMSJB6JIghQUIkiCFBDAkSIkEMCWJIkBAJYkgQY+gE2bx58/TKlSt7ztatW0OLVZoS5NRTT6X7XbZsGa33BPnnn3+mt2zZQoPPGMMmCMaajUVq8N0zJEgJDBSrT82DDz4YWqzSlCCp8QTphmETBGPN6lOD754hQUpIkHokSBEJ0kMkiEWCdI8ECZEghgQxJEiIBDEkiCFBQlIFOeecc6Y3btw4I966oX4Ign2zPn3//fdhy86QIIYECUkVpKnrIN3gCYJ9N4EEMSRIiAQxJIghQUIkiCFBDAkSIkEMCWJIkBAJYkgQQ4KEpApy1llntWaN2vP4449Pr1u3jobVd5OFCxfSPq1atYrWe9m/f384yioSxJAgIamCeLngggvCllUw1crqBxkcG0OCGBIkRIIYEsSQICESxJAghgQJkSCGBDEkSIgEMSSIMXSCbNu2rTXgvWbnzp2hxSqpgnz55Ze0/RUrVtB2PEF++eUX2k4s8+fPp/toKk0JgrFm/U8NvnuGBOkjqYJ4YIUsa8cTpBuOP/54uo+m0pQguZEgfUSCWCRIPRIkRIIYEsSQICESxJAghgQJkSCGBDEGJsh9993XGvB+x5tG9gQ5ePAgbWdycnL67rvvnhG8N4/Vv/nmm6HFKnj2FatH7rnnHrqPE044wT0GVn/aaafR+lRBMHasn7mDc4X1Z6QFGbZ4guAkYvVNreZt8smK3mpe9JXVpwoybJEgfYwEMSSIIUFCJIghQQwJEiJBDAliSJAQCWJIECO7IBMTE60BH/Y8//zzocdVPEHOP//86XfeeWdGNmzYQOs9Qf766y/aHwRrk9g+MJvE6l977TVaPz4+Tuv37NkTelEFY8Hqhy04t3KTXZDZjidIajxBYnjXQbAymIFrMKwe12xEd0iQGiTI3EaC1CBB5jYSpAYJMreRIDVIkLnNwATZvXt36+TrNAcOHAhbVsGznVg97gRkYG0Vq/eCtUDXXnttx7niiivoSbpo0SLa/q5du0LPZuIJ8vbbb9O2brnlFtonb/rXY+/evbR9jB0DY83qc2dqair0IB8DE+TGG2+kX74XPMafgQegsXrcwsnACc/qveAES8G7DuIFEnh4gnhJFcEDU6isfYwdA2PN6nNnJK6DeEiQIhKk+0iQUiRIfSRI80iQmkgQiwTpIxKkiATpPiMhyL59+6YxzdieO++8s7WIrtOsX7/ebYcNnifIjh07aPtecIcg49dff53RFwS3h7J2vFx55ZWhxZngM7aNl2+//TZs2RkQih3DNddcQ8fUE+SFF16g/WkqS5Ysof0ZCUFwEOzgUu9J92679OIJ0hQ4kdh+cS1itoC/juwYvHiC5EYPbegACdI8EqQeCdIlEqR/SJAOkCDNI0HqkSBdIkH6x0gLgqeg46Rpz0cffRQqOuPJJ5+k7Xh56KGHWrM0nebQoUNhT53RD0Gwxon19e+//w4VnYHZLdaOt24M719sH08Ea8Ca4Oeff6b98fLyyy/Tfo6EIIMC08JsUL1g7j+FfgjiXQfxVvN6YKqUteMFt+nmBNe02H5TI0F6QIIYEqR7JEiIBLFIEEOChEgQiwQxJEiIBLFIEGPOCYIno+P21/bgKegp4I5I1g5mhhj//vtv68Rm8fAE+eyzz2g7XrC2ivV1wYIFtH1PkMOHD9P2f/vtt1DRGXh+F+vPSSedRPtz3HHH0frly5eHFvMx5wRJFaEpcCKx/kACD0+Q1OCvHcO7DuIJgrFj9RjrJtiyZQttHyu/B4UE6RMSpB4J0kckiEWCdI8E6RMSpB4J0kckiEWCdE92QY4cOdJ6jH+nwTv7mgBPKMcJ1h6894/tF09ZZ2D2idWn5rvvvqP9wcyNBz5j2xx11FH0RPKSKshbb71FjwFjx/rjPRkfa8ZYO95Ye4LccMMNtB2cW7nJLgjmqtlBe8Eg5QQrUtl+vesgeEAZq08NpiWbAm2xfXhJFcRL6mredevW0XawMpvhCeJlJK6DSJAiEsQiQUpIkCISxCJBSkiQIhLEIkFKSJAiEsQiQUpIkCISxCJBSnjTvJi6YwedKsjatWvp1KOX1GneVEHwkDPWvjfNGwu2Y/z5558z2o8FU9WMYRMEU/ys/9u3b6ftjIQgHrj4ww46VRDv0aNeUi8UpgriLXf3LhTGgpMjJ8MmiMdIP7TBQ4LUR4IUSJBSJIhFghRIkFIkiEWCFEiQUiSIRYIUjLQguC0S05LtwUPIcNK05/fffw9bVnn44YdpOwsXLqSD5yX1lltPkKVLl9L+//jjj2HLKviMtROLJ8iFF15IjwEvNGVcd911tN675RYitB8XsmrVKtrOSy+9FPZUBbfisnYmJydpO17GxsZoP0dCEBwEOzj8KqSAXx3WTlNJvQ6CByGkgBODtROLJwhOGlaPpxAymnpoA35EWH3qcnc9tKGEBCmQIIYEKSFBCiSIIUFKSJACCWJIkBISpECCGBKkBNYg4Ytrz2233daaEu003kyGF7zck+3Xi/f6A08QrJVi/fRy3nnn0XbwUDTWH+S///4Lvajy1Vdf0XrvFlTv9QdeMHbsGF588UVaj1dNsPoNGzaEHlTxXn/wzDPP0DG6+uqraT3OrdxkF8TDuw7SVJp6gY4nSFOBaMMG/pqyvnrXQTDWrB7XqFLANTDWDs6VQSFBapAgFgnSRyRIEQliSJASEqSIBDEkSAkJUkSCGHNSkPHx8dY0Y3vwCHzcCtqe66+/ng6SF7TP2jlw4EDoQZUdO3bQ/ni5/fbbafuvv/467U9qjj76aLpfxJuVwtoqVt9UTj75ZNrXc889l9YvXryY1uNloKzemxbGOjY21niZ6aDILkjqdZCVK1fSei9YMZoCfgVZO16w4pWBL47VN5nU6yCzJbimNVuQIDWRIM1HgpSQIN1HggweCVITCdJ8JEgJCdJ9JMjgyS7I1NRUa6q0PT/88EOoqIIXVLJ6L19//XXYsjMOHjxI2/ECoSBJey677DL65acGd/Wx/SKY0WP79u4ETM3TTz9N95uam266ibbvxRPkww8/pMfr5YEHHghb5iO7ILMdnADsS24qsesg+Ixt01RwbE3gXQfx4gniXQfxgv9OciNBapAg9UiQOYwEqUeCzGEkSD0SZA4jQeqRID0wMTHRWvw27PFeRJlbkGOOOYb2B9m2bVvr9tdOg7VPbB9ePEEwFqw/u3btChVVJEgP4CDYwQ1bcAIwcgsSi3cdxAO3ubJ2vHiCYCxYPaa8GRKkByRI95Eg8UiQPkaCGBLEkCAhEsSQIIYECZEghgQxBiYIBgkD3u94iyE9QbB2i7XzyCOP0HbOPPNMWv/cc8/R+mOPPZbWI3ifIh7W1p7Dhw+H3lXBTBZrB3cCsn17gmC2irXz+eefh4oquQW56KKLaH927twZtszHwATxVvPmBgPL+uMJ4uGt5sWvOMN7smI310HQVgq4zZW14wmSSm5BRvqedAlSIEEsEqSEBCmQIBYJUkKCFEgQiwQpIUEKJIhFgpRIFQTrjzDgvcab4UgVBM9kYu2vWLGCtoNnSrF6vN+P1c+fP5/WI/iMbdOUILgTkO03NZdccglt30uqIHgyPtvvpk2bwpb5GDpBUu9J94IBZKQKgl9ZVj/INCXIoJIqiBecW7mRICESpH+RICUkSPORIEUkSA+RIIYE6R4JEiJB+hcJUmK2C7J///7WY/zbc8cdd9B2TjnlFFp///3303rMVLF6xJvFwjsB8cC8TnP22WfTdm699Va6Xy8XX3wxbSc1l19+Oe3n2rVr6X69vPrqq+FbyocECfEE8RjkdZCmgr+OKWChJGunqeC7HzYkSIgEqUeCZECCFEiQ+kiQUiRIEQlikSClSJAiEsQiQUqZLYLgXYcbN26cEbTP2jn99NNp/eTkZGt6sz1r1qyh9Qg+Y9t4WbRoEe0Tjo3Ve3cIemzdupW2s3TpUrpfrNFi9V4wzcv45ptv6Phs3749VORDgoR4guBXltWnBu/0YOC+c1aPNHVPOv7a5cT7scBUbBPgXGHt49zKjQQJkSDdI0F6QIIUkSDdI0FKSBCLBCmQICUkiEWCFEiQEps3b25J0msw48LILciJJ55I+3PXXXe1Zmna88Ybb9B6BJ+xbbwsXryY9glrnFj9oUOHwlH2hifIsmXL6H49YfG+SVaPZ4qx8XnqqafClvkYOkFyk1sQ/IozRuE6iIcniBdM6TIgA6vXPel9RIJYJEg9EiREgnSPBOkBCVIgQSwSpIQEKZAgFglSwhMEU4CQpN9ZvXo17Y8nyO7du1tfUKe59957w5ZVPEEWLFhA+4ksX76c7iM1Y2NjdN9PPPEE3a83u7Vnzx5a/+ijj9L9esFMJcMTBLcMs/1+8sknYct8DEyQYYsnSFN4gsSSeh3EI/WedLxGgeGt5l2/fn2o6A1PEC84t3IjQUIkiEWCGBIkRIJYJIghQUIkiEWCGBIkRIJYJIiRXRDcFYcDGfZMTEyEHufhp59+ovuN5ciRI2Hr3hgfH6fte/n444/DllWeffZZWo8n8jfB+++/T9v3gnMrN9kFEWI2I0GEiCBBhIggQYSIIEGEiCBBhIggQYSIIEGEiCBBhIggQYSIIEGEiCBBhIggQYSIIEGEiCBBhIggQYSIIEGEiCBBhIggQYSIIEGEiCBBhIggQYSIIEGEiCBBhHCZnv4f+7wHfOSw/WEAAAAASUVORK5CYII=
 "@
@@ -1573,14 +3255,14 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     $SyncedVariables.Saved = $true
 
     #Loading settings from file
-    Invoke-LoadSettings -Path $SyncedVariables.SettingsFilename
+    Import-GUISettings -Path $SyncedVariables.SettingsFilename
 
     #region Event handlers
 
     $SyncHash.Form.add_Closing( {
             Write-Verbose "GUI Closing"
-            Invoke-SaveSettings -Path $SyncedVariables.SettingsFilename
-            Invoke-CleanOTPToken
+            Export-GUISettings -Path $SyncedVariables.SettingsFilename
+            Reset-GUIOTPToken
         }
     )
 
@@ -1591,7 +3273,27 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
 
     $SyncHash.Form.add_Activated( {
             Write-Verbose "GUI Activated"
-            Start-App
+            Invoke-ApplicationBasics
+        }
+    )
+
+    $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Add_TextChanged(
+        {
+            $cursorPos = $this.SelectionStart
+            try { $this.Text = [String]($this.Text).ToUpper() } catch { }
+            # tbSecretEncryptionCertificateThumbprint Text Changed Event
+            # Only allow 0-9 a-z A-Z
+            if ($this.Text -match '[^0-9a-zA-Z]') {
+                #Replace everything not in range 0-9 a-z A-Z
+                $this.Text = $this.Text -replace '[^0-9a-zA-Z]', $null
+                # move the cursor to the end of the text:
+                # $this.SelectionStart = $this.Text.Length
+                # or leave the cursor where it was before the replace
+                $this.SelectionStart = $cursorPos - 1
+            } else {
+                $this.SelectionStart = $cursorPos
+            }
+            $this.SelectionLength = 0
         }
     )
 
@@ -1599,7 +3301,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         { # btnGenerateSecret Click Action
             Write-Verbose "btnGenerateSecret Click"
             Update-Gui
-            Invoke-CleanGUIQRImage
+            Reset-GUIQRImage
             $SyncedVariables.B32Secret = Get-OTPSecret
             $SyncHash.WPFControl_tbSecret.Text = $SyncedVariables.B32Secret
             if (-Not $SyncHash.WPFControl_tbDeviceName.IsEnabled) { $SyncHash.WPFControl_tbDeviceName.IsEnabled = $true }
@@ -1624,7 +3326,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             if (-Not $SyncHash.WPFControl_btnSaveOtp.IsEnabled) { $SyncHash.WPFControl_btnSaveOtp.IsEnabled = $true }
             if (-Not $SyncHash.WPFControl_btnExportPosh.IsEnabled) { $SyncHash.WPFControl_btnExportPosh.IsEnabled = $true }
             $SyncedVariables.Saved = $false
-            Invoke-CleanGUIQR
+            Reset-GUIQR
         }
     )
 
@@ -1633,7 +3335,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             Write-Verbose "btnSaveOtp Click"
             Update-Gui
             Save-OtpToUser
-            Invoke-CleanGUIUser
+            Reset-GUIUser
         }
     )
 
@@ -1643,7 +3345,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             Update-Gui
             Save-OtpToUserExportCommand
             if ($SyncedVariables.Saved) {
-                Invoke-CleanGUIUser
+                Reset-GUIUser
             }
         }
     )
@@ -1668,7 +3370,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                 $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncedVariables.DeviceSecrets
             }
             $SyncedVariables.Saved = $false
-            Invoke-CleanGUIQR
+            Reset-GUIQR
         }
     )
 
@@ -1691,7 +3393,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             Write-Verbose "tbAttribute Text Changed"
             $SyncedVariables.Attribute = $SyncHash.WPFControl_tbAttribute.Text
             Write-Verbose "New Value: $($SyncedVariables.Attribute) | Saved value: $($SyncedVariables.Settings.LDAPSettings.LDAPAttribute)"
-            Invoke-CleanGUIUser
+            Reset-GUIUser
         }
     )
 
@@ -1724,7 +3426,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             Update-Gui
             Invoke-ValidateAddSecret
             Invoke-ValidateGUIQR
-            Invoke-UpdateTokenText
+            Update-GUITokenText
         }
     )
     $SyncHash.WPFControl_tbSecret.add_TextChanged( 
@@ -1748,23 +3450,41 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         { 
             Write-Verbose "lvUsernames Selection Changed"
             Update-Gui
-            Invoke-CleanGUIQR
+            Reset-GUIQR
             $SelectedItem = $SyncHash.WPFControl_lvUsernames.SelectedItem
+            Write-Verbose "Selected Item: $SelectedItem"
             if (-Not [String]::IsNullOrEmpty($($SelectedItem.Attribute))) {
                 $SyncedVariables.DeviceSecrets = @()
-                $SyncedVariables.DeviceSecrets += ConvertFrom-Attribute -Data $SelectedItem.Attribute
+                if ((Test-ValidEncryptedJson $SelectedItem.Attribute) -and ((-Not $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled) -or ([String]::IsNullOrEmpty(($SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint))))) {
+                    $null = [System.Windows.MessageBox]::Show("It looks like the source secret is encrypted.`r`nMake sure encryption is enabled and a correct Thumbprint is configured!", "Encrypted Token Found", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Exclamation)
+                } elseif (Test-ValidEncryptedJson $SelectedItem.Attribute) {
+                    Write-Verbose "Source Attribute: $SourceAttribute is Encrypted"
+                    try {
+                        $SyncedVariables.DeviceSecrets += ConvertFrom-EncryptedUserAttribute $SelectedItem.Attribute -Thumbprint $SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint
+                    } catch {
+                        $null = [System.Windows.MessageBox]::Show("An error occured while decrypting the secret(s).`r`nMake sure a correct Thumbprint is configured!`r`n$($_.Encryption.Message)", "Error", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Exclamation)
+                    }
+                } elseif (Test-ValidClearTextSecret $SelectedItem.Attribute) {
+                    Write-Verbose "Source Attribute: $SourceAttribute is ClearText"
+                    $SyncedVariables.DeviceSecrets += ConvertFrom-ClearTextUserAttribute $SelectedItem.Attribute
+                } else {
+                    Write-Verbose "Source Attribute: $SourceAttribute is UNKNOWN: $($SelectedItem.Attribute)"
+                    $SyncedVariables.DeviceSecrets = @()
+                }
+
                 $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncedVariables.DeviceSecrets
                 if ($SyncedVariables.DeviceSecrets.Count -eq 1) {
                     $SyncHash.WPFControl_lvOtps.SelectedIndex = 0
                 }
                 if (-Not $SyncHash.WPFControl_tbDeviceName.IsEnabled) { $SyncHash.WPFControl_tbDeviceName.IsEnabled = $true }
             } else {
+                Write-Verbose "No attribute data found"
                 $SyncHash.WPFControl_lvOtps.ItemsSource = $null
                 $SyncedVariables.DeviceSecrets = @()
                 if ($SyncHash.WPFControl_tbDeviceName.IsEnabled) { $SyncHash.WPFControl_tbDeviceName.IsEnabled = $false }
             }
             if (-Not [String]::IsNullOrEmpty($($SelectedItem.UserPrincipalName))) {
-                Invoke-UpdateTokenText
+                Update-GUITokenText
             }
         }
     )
@@ -1772,14 +3492,14 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     $SyncHash.WPFControl_lvOtps.add_SelectionChanged(
         { 
             Write-Verbose "lvOtps Selection Changed" 
-            Invoke-CleanOTPToken
+            Reset-GUIOTPToken
             Update-Gui
             $SelectedItem = $SyncHash.WPFControl_lvOtps.SelectedItem
             Write-Verbose "Selected item: $SelectedItem"
             if ([String]::IsNullOrEmpty($($SelectedItem.Secret))) {
                 if ($SyncHash.WPFControl_btnDeleteOtpSecret.IsEnabled) { $SyncHash.WPFControl_btnDeleteOtpSecret.IsEnabled = $false }
             } else {
-                Invoke-CleanGUIQRImage
+                Reset-GUIQRImage
                 if (-Not $SyncHash.WPFControl_btnDeleteOtpSecret.IsEnabled) { $SyncHash.WPFControl_btnDeleteOtpSecret.IsEnabled = $true }
                 if (-Not $SyncHash.WPFControl_gbToken.IsEnabled) { $SyncHash.WPFControl_gbToken.IsEnabled = $true }
                 $SelectedItem = $SyncHash.WPFControl_lvOtps.SelectedItem
@@ -1794,7 +3514,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     $SyncHash.WPFControl_btnGenerateQR.Add_Click(
         { # btnGenerateQR Click Action
             Write-Verbose "btnGenerateQR Click"
-            Invoke-CleanGUIQRImage
+            Reset-GUIQRImage
             if ($SyncedVariables.QRGenerationPossible) {
                 Get-GUIQRImage
                 Update-Gui
@@ -1867,9 +3587,9 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         { # btnSaveSettings Click Action
             Write-Verbose "btnSaveSettings Click"
             try {
-                Invoke-SaveSettings -Path $SyncedVariables.SettingsFilename
-                Invoke-LoadSettings -Path $SyncedVariables.SettingsFilename
-                Invoke-LoadModules
+                Export-GUISettings -Path $SyncedVariables.SettingsFilename
+                Import-GUISettings -Path $SyncedVariables.SettingsFilename
+                Import-ModulesGUI
                 Reset-GUIForm
             } catch {
                 Write-Verbose "$($_.Exception.Message)"
@@ -1883,16 +3603,31 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             $SyncHash.WPFControl_btnTestSettings.IsEnabled = $false
             $SyncHash.WPFControl_btnTestSettings.Content = "Checking..."
             Update-Gui
+            $failed = $false
             try {
                 try {
                     $Credential = New-Object System.Management.Automation.PSCredential ($SyncHash.WPFControl_tbLDAPUsername.Text, $(ConvertTo-SecureString $SyncHash.WPFControl_pbLDAPPassword.Password -AsPlainText -Force))
                 } catch {
                     $Credential = [PSCredential]::Empty
                 }
-                if (Test-AdsiADConnection -Server $SyncHash.WPFControl_tbLDAPServer.Text -Port $SyncHash.WPFControl_tbLDAPPort.Text -Credential $Credential) {
+                if (-Not (Test-AdsiADConnection -Server $SyncHash.WPFControl_tbLDAPServer.Text -Port $SyncHash.WPFControl_tbLDAPPort.Text -Credential $Credential)) {
+                    $null = [System.Windows.MessageBox]::Show("LDAP settings test failed!", "Test", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+                    $failed = $true
+                }
+                if ($SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsChecked -eq $true) {
+                    try {
+                        $CertTest = Test-CertificatePresent -Thumbprint $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text
+                    } catch {
+                        $CertTest = $_.Exception.Message
+                    }
+                    if ($CertTest -ne $true) {
+                        $null = [System.Windows.MessageBox]::Show("Certificate test failed!`r`n$CertTest", "Error", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+                        $failed = $true
+                    }
+
+                }
+                if (-Not $failed) {
                     $null = [System.Windows.MessageBox]::Show("Test OK!", "Test", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information)
-                } else {
-                    $null = [System.Windows.MessageBox]::Show("The test failed!", "Test", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
                 }
                 $SyncHash.WPFControl_btnTestSettings.Content = "Test"
                 $SyncHash.WPFControl_btnTestSettings.IsEnabled = $true
@@ -1901,6 +3636,29 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             }
         }
     )
+
+    $SyncHash.WPFControl_btnConversionStart.Add_Click(
+        { # btnConversionStart Click Action
+            Write-Verbose "btnConversionStart Click"
+            try {
+                Invoke-StartEncryption
+            } catch {
+                Write-Verbose "$($_.Exception.Message)"
+            }
+            Update-Gui
+        }
+    )
+
+    $SyncHash.WPFControl_btnLogPathPath.Add_Click(
+        { # btnLogPathPath Click Action
+            Write-Verbose "btnLogPathPath Click"
+            $SyncHash.WPFControl_tbLogPathPath.Text = Save-File -FileName "EncryptionResults.txt" -Filter "txt files (*.txt)|*.txt|All files (*.*)|*.*"
+            Update-Gui
+        }
+    )
+
+    
+
     $SyncHash.WPFControl_tbQRSize.Add_TextChanged(
         {
             # tbQRSize Text Changed Event
@@ -1918,14 +3676,6 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             }
         }
     )
-
-    #TokenText Handler
-    [System.Windows.RoutedEventHandler]$Script:TokenTextCheckedEventHandler = {
-        Write-Verbose "TokenText Checked Event"
-        $SyncedVariables.TokenText = ($_.source.Name -replace 'rbTokenTextOption', $null)
-        Invoke-UpdateTokenText
-        Write-Verbose $SyncedVariables.TokenText
-    }
 
     $SyncHash.WPFControl_tbLDAPPort.Add_TextChanged(
         {
@@ -1949,9 +3699,96 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         }
     )
 
-    $SyncHash.WPFControl_gbTokenText.AddHandler(
-        [System.Windows.Controls.RadioButton]::CheckedEvent, $TokenTextCheckedEventHandler
+    #TokenText Handler
+    [System.Windows.RoutedEventHandler]$Script:TokenTextSelectedEventHandler = {
+        Write-Verbose "TokenText Selected Event"
+        $SyncedVariables.TokenText = ($_.source.Name -replace 'rbTokenTextOption', $null)
+        Update-GUITokenText
+        Write-Verbose $SyncedVariables.TokenText
+    }
+    $SyncHash.WPFControl_spTokenText.AddHandler(
+        [System.Windows.Controls.RadioButton]::CheckedEvent, $Script:TokenTextSelectedEventHandler
     )
+
+    #Settings EncryptionEnabled Handler
+    [System.Windows.RoutedEventHandler]$Script:EncryptionEnabledCheckedEventHandler = {
+        param(
+            [Parameter(Mandatory)][Object]$sender
+        )
+        Set-GUISettingsEncryption $sender.IsChecked
+        Write-Verbose "EncryptionEnabled Checked Event $($sender.IsChecked)"
+        Update-GUI
+    }
+    $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.AddHandler(
+        [System.Windows.Controls.CheckBox]::CheckedEvent, $Script:EncryptionEnabledCheckedEventHandler
+    )
+    $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.AddHandler(
+        [System.Windows.Controls.CheckBox]::UnCheckedEvent, $Script:EncryptionEnabledCheckedEventHandler
+    )
+
+    #EncryptionOperation Handler
+    [System.Windows.RoutedEventHandler]$Script:EncryptionOperationSelectedEventHandler = {
+        Write-Verbose "EncryptionOperation Selected Event"
+        $SyncedVariables.EncryptionOperation = ($_.source.Name -replace 'rbEncryptionOperation', $null)
+        Set-GUIEncryptionOperation $SyncedVariables.EncryptionOperation
+        Write-Verbose $SyncedVariables.EncryptionOperation
+    }
+
+    $SyncHash.WPFControl_spEncryptionOperation.AddHandler(
+        [System.Windows.Controls.RadioButton]::CheckedEvent, $Script:EncryptionOperationSelectedEventHandler
+    )
+
+    #EncryptionOption Handler
+    [System.Windows.RoutedEventHandler]$Script:EncryptionOptionSelectedEventHandler = {
+        Write-Verbose "EncryptionOption Selected Event"
+        $SyncedVariables.EncryptionOption = ($_.source.Name -replace 'rbEncryptionOption', $null)
+        Set-GUIEncryptionOption $SyncedVariables.EncryptionOption
+        Write-Verbose $SyncedVariables.EncryptionOption
+    }
+    $SyncHash.WPFControl_spEncryptionOption.AddHandler(
+        [System.Windows.Controls.RadioButton]::CheckedEvent, $Script:EncryptionOptionSelectedEventHandler
+    )
+
+    $SyncHash.WPFControl_tbCurrentCertificateThumbprint.Add_TextChanged(
+        {
+            $cursorPos = $this.SelectionStart
+            try { $this.Text = [String]($this.Text).ToUpper() } catch { }
+            # tbCurrentCertificateThumbprint Text Changed Event
+            # Only allow 0-9 a-z A-Z
+            if ($this.Text -match '[^0-9a-zA-Z]') {
+                #Replace everything not in range 0-9 a-z A-Z
+                $this.Text = $this.Text -replace '[^0-9a-zA-Z]', $null
+                # move the cursor to the end of the text:
+                # $this.SelectionStart = $this.Text.Length
+                # or leave the cursor where it was before the replace
+                $this.SelectionStart = $cursorPos - 1
+            } else {
+                $this.SelectionStart = $cursorPos
+            }
+            $this.SelectionLength = 0
+        }
+    )
+
+    $SyncHash.WPFControl_tbNewCertificateThumbprint.Add_TextChanged(
+        {
+            $cursorPos = $this.SelectionStart
+            try { $this.Text = [String]($this.Text).ToUpper() } catch { }
+            # tbNewCertificateThumbprint Text Changed Event
+            # Only allow 0-9 a-z A-Z
+            if ($this.Text -match '[^0-9a-zA-Z]') {
+                #Replace everything not in range 0-9 a-z A-Z
+                $this.Text = $this.Text -replace '[^0-9a-zA-Z]', $null
+                # move the cursor to the end of the text:
+                # $this.SelectionStart = $this.Text.Length
+                # or leave the cursor where it was before the replace
+                $this.SelectionStart = $cursorPos - 1
+            } else {
+                $this.SelectionStart = $cursorPos
+            }
+            $this.SelectionLength = 0
+        }
+    )
+
     #endregion Event handlers
 
     #Set Title
@@ -1959,5 +3796,5 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     # Show/Run the App
     $SyncHash.App.Run($SyncHash.Form) | Out-Null
 }
-Invoke-EndApplication
+End-GUIApplication
 Write-Verbose "Bye, thank you for using OTP4ADC"
