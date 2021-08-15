@@ -1151,7 +1151,7 @@ function Import-QRModule {
 }
 
 function Import-ModulesGUI {
-    Write-Verbose "Starting function : Get-AdsiADDomain"
+    Write-Verbose "Starting function : Import-ModulesGUI"
     if ($Script:LDAPNativeFunctions) {
         try {
             Write-Verbose "Using Alternative AD Modules"
@@ -1197,7 +1197,7 @@ function Import-ModulesGUI {
         $null = [System.Windows.MessageBox]::Show("The PowerShell Module `"ActiveDirectory`" was NOT Found!`r`nYou can try to set the (experimental) `"Native AD`" option under settings.", "ActiveDirectory Module", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     }
     Import-QRModule
-    Write-Verbose "Ending function   : Get-AdsiADDomain"
+    Write-Verbose "Ending function   : Import-ModulesGUI"
 }
 function Import-ModulesCommandLine {
     Write-Verbose "Starting function : Import-ModulesCommandLine"
