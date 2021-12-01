@@ -4440,20 +4440,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     $SyncHash.WPFControl_spEncryptionOption.AddHandler(
         [System.Windows.Controls.RadioButton]::CheckedEvent, $Script:EncryptionOptionSelectedEventHandler
     )
-    <#
-        $SyncedVariables.Settings.GatewayURI = $SyncHash.WPFControl_tbGatewayURI.Text
-        $SyncedVariables.Settings.QRSize = $SyncHash.WPFControl_tbQRSize.Text
-        $SyncedVariables.Settings.ChangeSecretDisabled = $SyncHash.WPFControl_cbChangeSecretDisabled.IsChecked
-        $SyncedVariables.Settings.LDAPSettings.LDAPServer = $SyncHash.WPFControl_tbLDAPServer.Text
-        $SyncedVariables.Settings.LDAPSettings.LDAPPort = $SyncHash.WPFControl_tbLDAPPort.Text
-        $SyncedVariables.Settings.LDAPSettings.LDAPUsername = $SyncHash.WPFControl_tbLDAPUsername.Text
-        $SyncedVariables.Settings.LDAPSettings.LDAPPassword = try { ConvertTo-SecureString -String $($SyncHash.WPFControl_pbLDAPPassword.Password) -AsPlainText -Force -ErrorAction Stop } catch { $null }
-        $SyncedVariables.Settings.LDAPSettings.LDAPAttribute = $SyncHash.WPFControl_tbLDAPAttribute.Text
-        $SyncedVariables.Settings.LDAPSettings.LDAPNativeFunctions = $SyncHash.WPFControl_cbLDAPAlternativeModule.IsChecked
-        $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled = $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsChecked
-        $SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint = $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text
 
-#>
     $SyncHash.WPFControl_tbQRSize.Add_TextChanged(
         {
             # tbQRSize Text Changed Event
@@ -4609,8 +4596,8 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # SIG # Begin signature block
 # MIITYgYJKoZIhvcNAQcCoIITUzCCE08CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDjDWi+DF5XEBWl
-# 9Kx2MvwaNp9geFAAYu7LPBVzmpJ5R6CCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBht+80uwyEco/F
+# hfeXq/unT4Zqnpd6lDUpeMQ9Lt08pqCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
 # i/247uUvWN5TMA0GCSqGSIb3DQEBCwUAMHwxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # ExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoT
 # D1NlY3RpZ28gTGltaXRlZDEkMCIGA1UEAxMbU2VjdGlnbyBSU0EgQ29kZSBTaWdu
@@ -4704,11 +4691,11 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # IFNpZ25pbmcgQ0ECECwnTfNkELSL/bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQw
 # GAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGC
 # NwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQx
-# IgQgZf7fzLwqpycloutR1A8iSIz9TW0sZNsbIBflPy/5Y5QwDQYJKoZIhvcNAQEB
-# BQAEggEAT0n0eFB3XcMULuaRUF3qVjKW2gmqXScFHEoX6J6aVxHo40gcpoMuFlQV
-# XYO8UTJL7W3ENDEeDAmCIkqM4yPral0Ltt/fHYSjnKeer6BnGu5ipKNB5NbUk3dm
-# RugR9XLTJ8cl6Xl2htGTr0IiVFOplLjNi/h1pGHdOw58jsvLJqzVZbw19TPtp9Zo
-# 7UwdociL1WU3uZqq37q9LIWtN3ep/idi1sS8iucoQq0XEUvoPiPMuCip0ROnVnaQ
-# VexowisFuyOacXi5uPUYnTw4e5wDmn/BtZFvVrM2Rt8u2k1dWGnicCuCBPtr9Tmw
-# ZSQ6clmT1Zni45WRqoZTeaz6T0Wo8Q==
+# IgQgekgGGdv8bgf9EOJpor8BZEbfrOkIff7kVgmbYiG4KSMwDQYJKoZIhvcNAQEB
+# BQAEggEAJk6EVV4JIEO9cf+3MSuNLqUYALX2/YDQEqaIgjighPinFBeU4x3k05ts
+# Kjsn7se7cUE6R+B45ffnl19id48lm1MC2a7PlTMlqkTn50Do2Cj7cuafRZ9O7z4x
+# Z9xLdgOgBzWcaCVYtyYSzVEZ3mW3QZ2xnoQaa+CTIxXqY64XMr0yyyWFuQfcYE0O
+# 1/lpRgPF87REQohOftxfqEZHjXJxPu94AEwZtE762UXQdofQZUlMqhc5M/v18OCz
+# NFjcPOpUWzw1Ow9A9BZwQG4a/37MGsZ+TWZFBWbeYf/U6zD8kquNBsokMSrUyOvT
+# 2+av+KlrSRFV2YAhm6EGZaHoe0Y4Cw==
 # SIG # End signature block
