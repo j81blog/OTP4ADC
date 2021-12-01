@@ -15,14 +15,22 @@
     The size for height and width for the generated QR image in pixels.
     Default, 300 
 .EXAMPLE
-    .\OTP4ADC.ps1
-    Run the script with no parameters
+    PS C:\>.\OTP4ADC.ps1
+    Run the script with no parameters, a GUI will be shown
 .EXAMPLE
-    .\OTP4ADC.ps1 -attribute "extensionAttribute1" -GatewayURI "gw.domain.com"
+    PS C:\>.\OTP4ADC.ps1 -attribute "extensionAttribute1" -GatewayURI "gw.domain.com"
     Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
+.EXAMPLE
+    PS C:\>.\OTP4ADC.ps1 -attribute "UserParameters" -GatewayURI "gw.domain.com" -Username john.doe@domain.com -DeviceName Mobile -ExportPath C:\Export
+    Adding a new token to user john.doe@domain.com with the name Mobile in attribute UserParameters
+    Returns the following data:
+
+    UserPrincipalName     NewSecret                  QRFileName                                  Success
+    -----------------     ---------                  ----------                                  -------
+    john.doe@domain.com   NMBIP7SKCPOFSVWUYD36VMJISM C:\Export\john.doe@domain.com_Mobile.png    True
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v1.0.0
+    Version   : v1.0.1
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -33,12 +41,12 @@
 [CmdletBinding(DefaultParameterSetName = "GUI")]
 Param(
     [Parameter(ParameterSetName = "GUI")]
-    [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
+    [Parameter(ParameterSetName = "CommandLine", Mandatory)]
     [ValidateNotNullOrEmpty()]
     [String]$GatewayURI = "",
     
     [Parameter(ParameterSetName = "GUI")]
-    [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
+    [Parameter(ParameterSetName = "CommandLine", Mandatory)]
     [ValidateNotNullOrEmpty()]
     [String]$Attribute = "userParameters",
 
@@ -58,22 +66,25 @@ Param(
     [Parameter(ParameterSetName = "GUI")]
     [Switch]$Console,
 
-    [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
+    [Parameter(ParameterSetName = "CommandLine", Mandatory)]
     [String]$Username,
     
-    [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
+    [Parameter(ParameterSetName = "CommandLine", Mandatory)]
     [String]$DeviceName,
+    
+    [Parameter(ParameterSetName = "CommandLine")]
+    [String]$Secret,
     
     [Parameter(ParameterSetName = "CommandLine")]
     [Switch]$ReplaceTokens,
     
-    [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
+    [Parameter(ParameterSetName = "CommandLine", Mandatory)]
     [String]$ExportPath,
 
     [Parameter(ParameterSetName = "CommandLine")]
     [String]$Thumbprint
 )
-$AppVersion = "v1.0.0"
+$AppVersion = "v1.0.1"
 
 #region functions
 function Write-ToLogFile {
@@ -515,31 +526,6 @@ $($URI.AbsoluteUri)
     Write-Verbose "Ending function   : New-QRTOTPImage"
     if ($OutStream) { return $MemoryStream }
 }
-
-<# ToDo Remove / clean code
-function Get-OTPSecret {
-    [cmdletbinding()]
-    param(
-        [Int]$Length = 40
-    )
-    $base32Secret = $null
-    while ($null -eq $base32Secret) {
-        try{
-            $hexSecret = ((($Length) | ForEach-Object { ((1..$_) | ForEach-Object { ('{0:X}' -f (Get-random(16))) }) }) -Join "").ToLower()
-            $byteSecret = $hexSecret -replace '^0x', '' -split "(?<=\G\w{2})(?=\w{2})" | ForEach-Object { [Convert]::ToByte( $_, 16 ) }
-            $byteArrayAsBinaryString = -join $byteSecret.ForEach{ [Convert]::ToString($_, 2).PadLeft(8, '0') }
-            $base32Secret = [regex]::Replace($byteArrayAsBinaryString, '.{5}', {
-                    param($Match)
-                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'[[Convert]::ToInt32($Match.Value, 2)]
-                })
-        } catch {
-            $base32Secret = $null
-        }
-    }
-    return $base32Secret
-}  
-
-#>
 
 function Get-OTPSecret {
     [cmdletbinding()]
@@ -1216,6 +1202,7 @@ function Import-ModulesGUI {
     Import-QRModule
     Write-Verbose "Ending function   : Import-ModulesGUI"
 }
+
 function Import-ModulesCommandLine {
     Write-Verbose "Starting function : Import-ModulesCommandLine"
     if (Get-Module -ListAvailable  ActiveDirectory -ErrorAction SilentlyContinue) {
@@ -1528,7 +1515,7 @@ function Get-AdsiADDomain {
         })
     Write-Verbose "Ending function   : Get-AdsiADDomain"
 }
-        
+
 function Test-AdsiADConnection {
     [CmdletBinding()]
     Param(
@@ -1574,7 +1561,7 @@ function Test-AdsiADConnection {
     Write-Verbose "Ending function   : Test-AdsiADConnection [$result]"
     Write-Output $result
 }
-   
+
 function Get-AdsiADUser {
     [CmdletBinding()]
     Param(
@@ -1643,7 +1630,7 @@ function Get-AdsiADUser {
     }
     Write-Verbose "Ending function   : Get-AdsiADUser"
 }
-   
+
 function Set-AdsiADUser {
     [CmdletBinding()]
     Param(
@@ -1701,6 +1688,7 @@ function Set-AdsiADUser {
 #endregion ADSI Functions
 
 #region Encryption
+
 function Protect-Message {
     [CmdletBinding(DefaultParameterSetName = 'Key')]
     param (
@@ -1761,6 +1749,7 @@ function Invoke-IncrementBytes {
     }
     Write-Verbose "Ending function   : Invoke-IncrementBytes"
 }
+
 function Invoke-XorBytes {
     [CmdletBinding()]
     param (
@@ -1784,9 +1773,6 @@ function Get-CertificateFromStore {
         [String]$Thumbprint
     )
     $result = Get-ChildItem -Path Cert:\ -Recurse | Where-Object { $_.Thumbprint -eq $Thumbprint } | Select-Object -First 1
-    #$certificateStore = New-Object System.Security.Cryptography.X509Certificates.X509Store([System.Security.Cryptography.X509Certificates.StoreName]::My, [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-    #$certificateStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
-    #$storeCertificate = $certificateStore.Certificates | Where-Object { $_.Thumbprint -eq $Thumbprint }
     Write-Output $result
 }
 
@@ -1838,7 +1824,6 @@ function Get-HashSha1 {
     Write-Output $result
     Write-Verbose "Ending function   : Get-HashSha1"# [$($cert.GetCertHash())]"
 }
-
 
 function Test-CertificateOnSecret {
     [CmdletBinding(DefaultParameterSetName = "CertThumbprint")]
@@ -2718,6 +2703,7 @@ function Invoke-StartEncryption {
     $SyncHash.WPFControl_btnConversionStart.IsEnabled = $true
     Write-Verbose "Ending function   : Invoke-StartEncryption"
 }
+
 function ConvertFrom-HashTable {
     [CmdletBinding()]
     param(
@@ -2814,7 +2800,11 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
         Throw "Device name `"$DeviceName`" is already in use, specify a unique name! In use: `"$($DeviceSecrets.DeviceName -Join '", "')`""
     }
     
-    $Output.NewSecret = Get-OTPSecret
+    if ([String]::IsNullOrEmpty($Secret)) {
+        $Output.NewSecret = Get-OTPSecret
+    } else {
+        $Output.NewSecret = $Secret
+    }
 
     $DeviceSecrets += [PSCustomObject]@{
         DeviceName = $DeviceName
@@ -4596,8 +4586,8 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # SIG # Begin signature block
 # MIITYgYJKoZIhvcNAQcCoIITUzCCE08CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBht+80uwyEco/F
-# hfeXq/unT4Zqnpd6lDUpeMQ9Lt08pqCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCApZXt1W/vs7ESQ
+# /LwKaYaJ1Jk/ed47Psh77pBsHvBlIqCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
 # i/247uUvWN5TMA0GCSqGSIb3DQEBCwUAMHwxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # ExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoT
 # D1NlY3RpZ28gTGltaXRlZDEkMCIGA1UEAxMbU2VjdGlnbyBSU0EgQ29kZSBTaWdu
@@ -4691,11 +4681,11 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # IFNpZ25pbmcgQ0ECECwnTfNkELSL/bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQw
 # GAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGC
 # NwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQx
-# IgQgekgGGdv8bgf9EOJpor8BZEbfrOkIff7kVgmbYiG4KSMwDQYJKoZIhvcNAQEB
-# BQAEggEAJk6EVV4JIEO9cf+3MSuNLqUYALX2/YDQEqaIgjighPinFBeU4x3k05ts
-# Kjsn7se7cUE6R+B45ffnl19id48lm1MC2a7PlTMlqkTn50Do2Cj7cuafRZ9O7z4x
-# Z9xLdgOgBzWcaCVYtyYSzVEZ3mW3QZ2xnoQaa+CTIxXqY64XMr0yyyWFuQfcYE0O
-# 1/lpRgPF87REQohOftxfqEZHjXJxPu94AEwZtE762UXQdofQZUlMqhc5M/v18OCz
-# NFjcPOpUWzw1Ow9A9BZwQG4a/37MGsZ+TWZFBWbeYf/U6zD8kquNBsokMSrUyOvT
-# 2+av+KlrSRFV2YAhm6EGZaHoe0Y4Cw==
+# IgQgQesLlp4SKffZWm6zPS0J2oyeMa+X8dP4p+vzGT+hMYUwDQYJKoZIhvcNAQEB
+# BQAEggEAegdVW/iD0rQwKuIe1Ux/XrTTZQjBXK7p1kY2sH/7qTWLdECOl6eHlWCL
+# 0txYQ04ZfhvvO4RUNQlkf1BD+BGSNfEn3F1MVYWYhlYciPx29EaeLu9vkWzlsN1R
+# vb5PguydoNaLXRMB9pd/LNRqTNohMf34jSgQvZPkh5tlyhim3u45TSv9nzTrFiBA
+# KbgxI1J3v4qqqhASNlqlChJzVGyvCZt/rPQrQeEAx4Tf17CzycugLuheYpeHuJwu
+# hnQgc34x4wuyp8GwCe9oVFGP9aj0HAG/B2HGRlMoQLF9CTNhKm/A3IOUqcsIEDPP
+# Iyhf6QNx8BHnG5IVgE6ZQBcw8lXBNw==
 # SIG # End signature block
