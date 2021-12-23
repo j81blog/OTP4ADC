@@ -28,9 +28,21 @@
     UserPrincipalName     NewSecret                  QRFileName                                  Success
     -----------------     ---------                  ----------                                  -------
     john.doe@domain.com   NMBIP7SKCPOFSVWUYD36VMJISM C:\Export\john.doe@domain.com_Mobile.png    True
+.EXAMPLE
+    PS C:\>.\OTP4ADC.ps1 -attribute "UserParameters" -GatewayURI "gw.domain.com" -ExportPath C:\Export -CsvPath C:\Script\Usernames.csv
+    This command will enumerate each entry from the csv and set a (new)secret.
+
+    Use a csv with the following header
+    "Username","DeviceName"
+
+    If you want to set your own secrets, you can use the following header
+    "Username","DeviceName","Secret"
+
+    Default Delimiter is a comma ",", specify the -Delimiter parameter de define a different one
+
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v1.0.1
+    Version   : v1.0.3
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -39,14 +51,19 @@
 #>
 
 [CmdletBinding(DefaultParameterSetName = "GUI")]
+[System.Diagnostics.CodeAnalysis.SuppressMessageAttribute("PSAvoidAssignmentToAutomaticVariable", "")]
 Param(
     [Parameter(ParameterSetName = "GUI")]
     [Parameter(ParameterSetName = "CommandLine", Mandatory)]
+    [Parameter(ParameterSetName = "CommandLineSecret", Mandatory)]
+    [Parameter(ParameterSetName = "FileImport", Mandatory)]
     [ValidateNotNullOrEmpty()]
     [String]$GatewayURI = "",
     
     [Parameter(ParameterSetName = "GUI")]
     [Parameter(ParameterSetName = "CommandLine", Mandatory)]
+    [Parameter(ParameterSetName = "CommandLineSecret", Mandatory)]
+    [Parameter(ParameterSetName = "FileImport", Mandatory)]
     [ValidateNotNullOrEmpty()]
     [String]$Attribute = "userParameters",
 
@@ -55,10 +72,14 @@ Param(
     
     [Parameter(ParameterSetName = "GUI")]
     [Parameter(ParameterSetName = "CommandLine")]
+    [Parameter(ParameterSetName = "CommandLineSecret")]
+    [Parameter(ParameterSetName = "FileImport")]
     [ValidateNotNullOrEmpty()]
     [Int]$QRSize = 300,
     
     [Parameter(ParameterSetName = "CommandLine")]
+    [Parameter(ParameterSetName = "CommandLineSecret")]
+    [Parameter(ParameterSetName = "FileImport")]
     [ValidateNotNullOrEmpty()]
     [ValidateSet("1", "2", "3")]
     [String]$TokenText = "2",
@@ -67,26 +88,55 @@ Param(
     [Switch]$Console,
 
     [Parameter(ParameterSetName = "CommandLine", Mandatory)]
+    [Parameter(ParameterSetName = "CommandLineSecret", Mandatory)]
     [String]$Username,
     
     [Parameter(ParameterSetName = "CommandLine", Mandatory)]
+    [Parameter(ParameterSetName = "CommandLineSecret", Mandatory)]
     [String]$DeviceName,
     
-    [Parameter(ParameterSetName = "CommandLine")]
+    [Parameter(ParameterSetName = "CommandLineSecret")]
     [String]$Secret,
     
+    [Parameter(ParameterSetName = "FileImport")]
     [Parameter(ParameterSetName = "CommandLine")]
+    [Parameter(ParameterSetName = "CommandLineSecret")]
     [Switch]$ReplaceTokens,
     
+    [Parameter(ParameterSetName = "FileImport", Mandatory)]
     [Parameter(ParameterSetName = "CommandLine", Mandatory)]
     [String]$ExportPath,
 
+    [Parameter(ParameterSetName = "FileImport")]
     [Parameter(ParameterSetName = "CommandLine")]
-    [String]$Thumbprint
+    [Parameter(ParameterSetName = "CommandLineSecret")]
+    [String]$Thumbprint,
+
+    [Parameter(ParameterSetName = "FileImport", Mandatory)]
+    [ValidateScript({
+            if (-Not ($_ | Test-Path) ) {
+                throw "File or folder does not exist"
+            }
+            if (-Not ($_ | Test-Path -PathType Leaf) ) {
+                throw "The Path argument must be a file. Folder paths are not allowed."
+            }
+            if ($_ -notmatch "(\.csv)") {
+                throw "The file specified in the path argument must be of type csv"
+            }
+            return $true
+        })]
+    [System.IO.FileInfo]$CsvPath,
+
+    [Parameter(ParameterSetName = "FileImport", Mandatory)]
+    [ValidateNotNullOrEmpty()]
+    [ValidateSet(",", ";", "`t", " ", "|")]
+    [String]$Delimiter = ","
 )
-$AppVersion = "v1.0.1"
+
+$AppVersion = "v1.0.3"
 
 #region functions
+
 function Write-ToLogFile {
     <#
 .SYNOPSIS
@@ -272,8 +322,6 @@ function Write-ToLogFile {
         [Switch]$NewLog
     )
     begin {
-        #Determine root path
-        $RootPath = $(if ($psISE) { Split-Path -Path $psISE.CurrentFile.FullPath } else { $(if ($Script:PSScriptRoot.Length -gt 0) { $Script:PSScriptRoot } else { $Script:pwd.Path }) })
         # Set Message Type to Informational if nothing is defined.
         if ((-Not $I) -and (-Not $W) -and (-Not $E) -and (-Not $D) -and (-Not $Block) -and (-Not $WriteHeader)) {
             $I = $true
@@ -1403,10 +1451,10 @@ function Export-GUISettings {
     }
 }
 
-function End-GUIApplication {
+function Stop-GUIApplication {
     [CmdletBinding()]
     param ()
-    Write-Verbose "Starting function : End-GUIApplication"
+    Write-Verbose "Starting function : Stop-GUIApplication"
     try {
         if ($SyncedVariables.IsGUI) {
             $SyncHash.Form.Close()
@@ -2721,7 +2769,7 @@ function ConvertFrom-HashTable {
 
 #endregion functions
 
-if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
+if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetName -eq "CommandLineSecret") -or ($PsCmdlet.ParameterSetName -eq "FileImport")) {
     Write-Verbose "Running CommandLine mode!"
     $SyncedVariables = [hashtable]::Synchronized(@{ })
     $SyncedVariables.IsGUI = $false
@@ -2731,155 +2779,171 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
     } elseif (-not [String]::IsNullOrEmpty($Thumbprint)) {
         Write-Verbose "A Thumbprint was provided, saving secrets encrypted."
     }
-    try {
-        New-Item -Path $ExportPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-    } catch {
-        Throw "Could not create the path specified `"$ExportPath`""
+    if (-Not ($PsCmdlet.ParameterSetName -eq "CommandLineSecret")) {
+        try {
+            New-Item -Path $ExportPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+        } catch {
+            Throw "Could not create the path specified `"$ExportPath`""
+        }
+        if (-Not (Test-Path -Path $ExportPath)) {
+            Throw "Could not find the path specified `"$ExportPath`""
+        }
+        Write-Verbose "Export Path `"$ExportPath`" configured."
     }
-    if (-Not (Test-Path -Path $ExportPath)) {
-        Throw "Could not find the path specified `"$ExportPath`""
-    }
-    Write-Verbose "Export Path `"$ExportPath`" configured."
-    $Output = [PSCustomObject]@{
-        UserPrincipalName = $null
-        NewSecret         = $null
-        QRFileName        = $null
-        Success           = $false
-    }
-    if (-Not [String]::IsNullOrEmpty($Username)) {
-        $ADUser = Get-ADUser -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$Username*)(UserPrincipalName=*$Username*)(SamAccountName=*$Username*)))" -Properties @($Attribute) | ForEach-Object {
-            $Username = $_.SamAccountName
-            [PSCustomObject]@{
-                SamAccountName    = $Username
-                GivenName         = $_.GivenName
-                Surname           = $_.Surname
-                Name              = $_.Name
-                Attribute         = $_."$Attribute"
-                DistinguishedName = $_.DistinguishedName
-                UserPrincipalName = $_.UserPrincipalName
+    $userData = @()
+    switch ($PsCmdlet.ParameterSetName) {
+        "CommandLine" { 
+            $userData += [PSCustomObject]@{
+                Username   = $Username
+                DeviceName = $DeviceName
+                Secret     = $Secret
             }
         }
-    } else {
-        Throw "No user was found!"
-    }
-    
-    if ($ADUser.Count -gt 1) {
-        Write-Host "Multiple accounts found, please select only one!"
-        $ADUser | ForEach-Object {
-            Write-Host -ForegroundColor Yellow "Name: $($_.Name)`r`nSAM: $($_.SamAccountName)`r`nUPN: $($_.UserPrincipalName)`r`n"
+        "FileImport" { 
+            $userData += Get-Content -Path $CsvPath.Fullname -Raw | ConvertFrom-Csv -Delimiter $Delimiter
         }
-        Throw "Multiple user accounts found"
     }
-    $Output.UserPrincipalName = $ADUser.UserPrincipalName
-    Write-Verbose "$($ADUser | Out-String )"
-
-    $DeviceSecrets = @()
-    if (-Not $ReplaceTokens) {
-        if (Test-ValidEncryptedJson $ADUser.Attribute) {
-            Write-Verbose "Source Attribute: $Attribute is Encrypted"
-            if ([String]::IsNullOrEmpty($Thumbprint)) {
-                Throw "Source attribute `"$Attribute`" contains an encrypted token, please specify correct certificate Thumbprint!"
+    ForEach ($item in $userData) {
+        $Output = [PSCustomObject]@{
+            UserPrincipalName = $null
+            NewSecret         = $null
+            QRFileName        = $null
+            Success           = $false
+        }
+        if (-Not [String]::IsNullOrEmpty($item.Username)) {
+            $ADUser = Get-ADUser -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$($item.Username)*)(UserPrincipalName=*$($item.Username)*)(SamAccountName=*$($item.Username)*)))" -Properties @($Attribute) | ForEach-Object {
+                $Username = $_.SamAccountName
+                [PSCustomObject]@{
+                    SamAccountName    = $Username
+                    GivenName         = $_.GivenName
+                    Surname           = $_.Surname
+                    Name              = $_.Name
+                    Attribute         = $_."$Attribute"
+                    DistinguishedName = $_.DistinguishedName
+                    UserPrincipalName = $_.UserPrincipalName
+                }
             }
-            try {
-                $DeviceSecrets += ConvertFrom-EncryptedUserAttribute $ADUser.Attribute -Thumbprint $Thumbprint
-            } catch {
-                Throw "Certificate thumbprint `"$Thumbprint`" possibly not valid!"
-            }
-        } elseif (Test-ValidClearTextSecret $ADUser.Attribute) {
-            Write-Verbose "Source Attribute: $Attribute is ClearText"
-            $DeviceSecrets += ConvertFrom-ClearTextUserAttribute $ADUser.Attribute
         } else {
-            Write-Verbose "Source Attribute: $Attribute is UNKNOWN: $($ADUser.Attribute)"
-            $DeviceSecrets = @()
+            Write-Error "No user was found for entry `"$($item.Username)`"!"
+            Break
         }
-    } else {
-        Write-Verbose "ReplaceTokens was specified, overwriting all Tokens for user!"
-    }
-
-    if ($DeviceName -in $DeviceSecrets.DeviceName) {
-        Throw "Device name `"$DeviceName`" is already in use, specify a unique name! In use: `"$($DeviceSecrets.DeviceName -Join '", "')`""
-    }
-    
-    if ([String]::IsNullOrEmpty($Secret)) {
-        $Output.NewSecret = Get-OTPSecret
-    } else {
-        $Output.NewSecret = $Secret
-    }
-
-    $DeviceSecrets += [PSCustomObject]@{
-        DeviceName = $DeviceName
-        Secret     = $Output.NewSecret
-    }
-
-    Write-Verbose "$($DeviceSecrets | Out-String )"
-
-    Write-Verbose "$TokenURI"
-    try {
-        $OTPUri = "otpauth://totp/"
-        switch ($TokenText) {
-            "1" {
-                # username@domain.com
-                $OTPUri += [Uri]::EscapeDataString($('{0}' -f $ADUser.UserPrincipalName))
-                Break
+        if ($ADUser.Count -gt 1) {
+            Write-Warning "Multiple accounts found for username `"$($item.Username)`", please select only one!"
+            $ADUser | ForEach-Object {
+                Write-Warning "Name: $($_.Name)`r`nSAM: $($_.SamAccountName)`r`nUPN: $($_.UserPrincipalName)`r`n"
             }
-            "2" {
-                #username@gateway.domain.com
-                $OTPUri += [Uri]::EscapeDataString($('{0}@{1}' -f $ADUser.SamAccountName, $GatewayURI))
-                Break
-            }
-            "3" {
-                #username@domain.com@gateway.domain.com
-                $OTPUri += [Uri]::EscapeDataString($('{0}@{1}' -f $ADUser.UserPrincipalName, $GatewayURI ))
-                Break
-            }
-            Default {
-                $OTPUri += [Uri]::EscapeDataString($('{0}' -f $ADUser.UserPrincipalName))
-                Break
-            }
+            Write-Error "Multiple user accounts found"
+            Break
         }
-        
-        $OTPUri += "?secret={0}&device={1}" -f $Output.NewSecret, $DeviceName
-        Write-Verbose "OTP Uri: $OTPUri"
-        $QRImage = New-QRTOTPImage -URI $OTPUri -OutStream
-    
-    } catch {
-        $Output.NewSecret = $null
-        Write-Output $Output
-        Throw "Error while generating QR Image, $($_.Exception.Message)"
-    }
-    try {
-        $DistinguishedName = $ADUser.DistinguishedName
-        Write-Verbose "User: $DistinguishedName"
-        if ($DeviceSecrets.Count -gt 0) {
-            if ([String]::IsNullOrEmpty($Thumbprint)) {
-                $NewOTPString = ConvertTo-ClearTextUserAttribute -object $DeviceSecrets
+        $Output.UserPrincipalName = $ADUser.UserPrincipalName
+        Write-Verbose "$($ADUser | Out-String )"
+        $DeviceSecrets = @()
+        if (-Not $ReplaceTokens) {
+            if (Test-ValidEncryptedJson $ADUser.Attribute) {
+                Write-Verbose "Source Attribute: $Attribute is Encrypted"
+                if ([String]::IsNullOrEmpty($Thumbprint)) {
+                    Throw "Source attribute `"$Attribute`" contains an encrypted token, please specify correct certificate Thumbprint!"
+                }
+                try {
+                    $DeviceSecrets += ConvertFrom-EncryptedUserAttribute $ADUser.Attribute -Thumbprint $Thumbprint
+                } catch {
+                    Throw "Certificate thumbprint `"$Thumbprint`" possibly not valid!"
+                }
+            } elseif (Test-ValidClearTextSecret $ADUser.Attribute) {
+                Write-Verbose "Source Attribute: $Attribute is ClearText"
+                $DeviceSecrets += ConvertFrom-ClearTextUserAttribute $ADUser.Attribute
             } else {
-                $NewOTPString = ConvertTo-EncryptedUserAttribute -object $DeviceSecrets -Thumbprint $Thumbprint
+                Write-Verbose "Source Attribute: $Attribute is UNKNOWN: $($ADUser.Attribute)"
+                $DeviceSecrets = @()
             }
-            Write-Verbose "New OTP AD User String: `"$NewOTPString`""
-            Set-ADUser -Identity $DistinguishedName -Replace @{ "$Attribute" = $NewOTPString } -ErrorAction Stop
         } else {
-            Write-Verbose "No OTP for user, save empty string"
-            $NewOTPString = $null
-            Set-ADUser -Identity $DistinguishedName -Clear @("$Attribute") -ErrorAction Stop
+            Write-Verbose "ReplaceTokens was specified, overwriting all Tokens for user!"
         }
-    } catch {
-        $Output.NewSecret = $null
+        if ($item.DeviceName -in $DeviceSecrets.DeviceName) {
+            Write-Error "Device name `"$($item.DeviceName)`" is already in use for username `"$($item.Username)`", specify a unique name! In use: `"$($DeviceSecrets.DeviceName -Join '", "')`""
+            Break
+        }
+        if ([String]::IsNullOrEmpty($item.Secret)) {
+            $Output.NewSecret = Get-OTPSecret
+        } else {
+            $Output.NewSecret = $Secret
+        }
+        $DeviceSecrets += [PSCustomObject]@{
+            DeviceName = $item.DeviceName
+            Secret     = $Output.NewSecret
+        }
+        Write-Verbose "$($DeviceSecrets | Out-String )"
+        Write-Verbose "$TokenURI"
+        try {
+            $OTPUri = "otpauth://totp/"
+            switch ($TokenText) {
+                "1" {
+                    # username@domain.com
+                    $OTPUri += [Uri]::EscapeDataString($('{0}' -f $ADUser.UserPrincipalName))
+                    Break
+                }
+                "2" {
+                    #username@gateway.domain.com
+                    $OTPUri += [Uri]::EscapeDataString($('{0}@{1}' -f $ADUser.SamAccountName, $GatewayURI))
+                    Break
+                }
+                "3" {
+                    #username@domain.com@gateway.domain.com
+                    $OTPUri += [Uri]::EscapeDataString($('{0}@{1}' -f $ADUser.UserPrincipalName, $GatewayURI ))
+                    Break
+                }
+                Default {
+                    $OTPUri += [Uri]::EscapeDataString($('{0}' -f $ADUser.UserPrincipalName))
+                    Break
+                }
+            }
+            $OTPUri += "?secret={0}&device={1}" -f $Output.NewSecret, $DeviceName
+            Write-Verbose "OTP Uri: $OTPUri"
+            $QRImage = New-QRTOTPImage -URI $OTPUri -OutStream
+        } catch {
+            $Output.NewSecret = $null
+            Write-Output $Output
+            Write-Error "Error while generating QR Image for username `"$($item.Username)`", $($_.Exception.Message)"
+            Break
+        }
+        try {
+            $DistinguishedName = $ADUser.DistinguishedName
+            Write-Verbose "User: $DistinguishedName"
+            if ($DeviceSecrets.Count -gt 0) {
+                if ([String]::IsNullOrEmpty($Thumbprint)) {
+                    $NewOTPString = ConvertTo-ClearTextUserAttribute -object $DeviceSecrets
+                } else {
+                    $NewOTPString = ConvertTo-EncryptedUserAttribute -object $DeviceSecrets -Thumbprint $Thumbprint
+                }
+                Write-Verbose "New OTP AD User String: `"$NewOTPString`""
+                Set-ADUser -Identity $DistinguishedName -Replace @{ "$Attribute" = $NewOTPString } -ErrorAction Stop
+            } else {
+                Write-Verbose "No OTP for user, save empty string"
+                $NewOTPString = $null
+                Set-ADUser -Identity $DistinguishedName -Clear @("$Attribute") -ErrorAction Stop
+            }
+        } catch {
+            $Output.NewSecret = $null
+            Write-Output $Output
+            Write-Error "Error while saving User Attributes for username `"$($item.Username)`", $($_.Exception.Message)"
+            Break
+        }
+        if (-Not ($PsCmdlet.ParameterSetName -eq "CommandLineSecret")) {
+            try {
+                $PNGFileName = Join-Path -Path $ExportPath -ChildPath "$($ADUser.UserPrincipalName)_$($DeviceName).png"
+                Write-Verbose "Exporting QR code to `"$PNGFileName`""
+                [System.IO.File]::WriteAllBytes($PNGFileName, $($QRImage.ToArray()))
+                $Output.QRFileName = $PNGFileName
+            } catch {
+                Write-Output $Output
+                Write-Error "Error while exporting the QR Image for username `"$($item.Username)`", $($_.Exception.Message)"
+                Break
+            }
+        }
+        $Output.Success = $true
+        Write-Verbose "Finished with username `"$($item.Username)`""
         Write-Output $Output
-        Throw "Error while saving User Attributes, $($_.Exception.Message)"
     }
-    try {
-        $PNGFileName = Join-Path -Path $ExportPath -ChildPath "$($ADUser.UserPrincipalName)_$($DeviceName).png"
-        Write-Verbose "Exporting QR code to `"$PNGFileName`""
-        [System.IO.File]::WriteAllBytes($PNGFileName, $($QRImage.ToArray()))
-        $Output.QRFileName = $PNGFileName
-    } catch {
-        Write-Output $Output
-        Throw "Error while exporting the QR Image, $($_.Exception.Message)"
-    }
-    $Output.Success = $true
-    Write-Verbose "Finished"
-    Write-Output $Output
 } else {
     #Load Assemblies
     Write-Verbose "Running in GUI mode!"
@@ -4580,14 +4644,14 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     # Show/Run the App
     $SyncHash.App.Run($SyncHash.Form) | Out-Null
 }
-End-GUIApplication
+Stop-GUIApplication
 Write-Verbose "Bye, thank you for using OTP4ADC"
 
 # SIG # Begin signature block
 # MIITYgYJKoZIhvcNAQcCoIITUzCCE08CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCApZXt1W/vs7ESQ
-# /LwKaYaJ1Jk/ed47Psh77pBsHvBlIqCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAyK86X9Ao/83vh
+# M8iRZuJXquJ2G873AzeVuUUS1bOnB6CCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
 # i/247uUvWN5TMA0GCSqGSIb3DQEBCwUAMHwxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # ExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoT
 # D1NlY3RpZ28gTGltaXRlZDEkMCIGA1UEAxMbU2VjdGlnbyBSU0EgQ29kZSBTaWdu
@@ -4681,11 +4745,11 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # IFNpZ25pbmcgQ0ECECwnTfNkELSL/bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQw
 # GAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGC
 # NwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQx
-# IgQgQesLlp4SKffZWm6zPS0J2oyeMa+X8dP4p+vzGT+hMYUwDQYJKoZIhvcNAQEB
-# BQAEggEAegdVW/iD0rQwKuIe1Ux/XrTTZQjBXK7p1kY2sH/7qTWLdECOl6eHlWCL
-# 0txYQ04ZfhvvO4RUNQlkf1BD+BGSNfEn3F1MVYWYhlYciPx29EaeLu9vkWzlsN1R
-# vb5PguydoNaLXRMB9pd/LNRqTNohMf34jSgQvZPkh5tlyhim3u45TSv9nzTrFiBA
-# KbgxI1J3v4qqqhASNlqlChJzVGyvCZt/rPQrQeEAx4Tf17CzycugLuheYpeHuJwu
-# hnQgc34x4wuyp8GwCe9oVFGP9aj0HAG/B2HGRlMoQLF9CTNhKm/A3IOUqcsIEDPP
-# Iyhf6QNx8BHnG5IVgE6ZQBcw8lXBNw==
+# IgQgXB+xyvRhNQz6lJweqHQMA3FCvUEcwfGxXc7KD9iW2fkwDQYJKoZIhvcNAQEB
+# BQAEggEAJfsGpWXOoFtFbLDi4m5lyN+49lH+LTt0mMjnZG2D/EAexbMTHPS8iTAG
+# qy5IJQN+eSEQ4g5opCBraeNo646NcqLLnQos7pD+jV2XfIiSFMM1V5P9hGHfhlQr
+# Lxl7TDMzl+4pWtO+j6lWa8HlUTCJ+IE1MYYsaSyUquPIEopS+VBY7A9aaCiKJnEE
+# WQyuaJUz/twnL5WBf62R4e0BUREFCluvWlco+VMVeKXLmYyPkhwhYreuNmj4R+3j
+# 8MLxbWDyyNzvj0xCVSn/SfeS4pCh6Y5C9pJOGoWQcMrAp+zUyS8wH0Gkm6epdtxt
+# 52fPKPkzpAvriPP2b+IDJaDeXokGTQ==
 # SIG # End signature block
