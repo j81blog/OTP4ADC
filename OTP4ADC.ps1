@@ -103,7 +103,7 @@ Param(
     [Parameter(ParameterSetName = "CommandLineSecret")]
     [Switch]$ReplaceTokens,
     
-    [Parameter(ParameterSetName = "FileImport", Mandatory)]
+    [Parameter(ParameterSetName = "FileImport")]
     [Parameter(ParameterSetName = "CommandLine", Mandatory)]
     [String]$ExportPath,
 
@@ -127,7 +127,7 @@ Param(
         })]
     [System.IO.FileInfo]$CsvPath,
 
-    [Parameter(ParameterSetName = "FileImport", Mandatory)]
+    [Parameter(ParameterSetName = "FileImport")]
     [ValidateNotNullOrEmpty()]
     [ValidateSet(",", ";", "`t", " ", "|")]
     [String]$Delimiter = ","
@@ -2770,6 +2770,7 @@ function ConvertFrom-HashTable {
 #endregion functions
 
 if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetName -eq "CommandLineSecret") -or ($PsCmdlet.ParameterSetName -eq "FileImport")) {
+    $exportQR = $true
     Write-Verbose "Running CommandLine mode!"
     $SyncedVariables = [hashtable]::Synchronized(@{ })
     $SyncedVariables.IsGUI = $false
@@ -2779,7 +2780,9 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
     } elseif (-not [String]::IsNullOrEmpty($Thumbprint)) {
         Write-Verbose "A Thumbprint was provided, saving secrets encrypted."
     }
-    if (-Not ($PsCmdlet.ParameterSetName -eq "CommandLineSecret")) {
+    if ($PsCmdlet.ParameterSetName -eq "FileImport" -and ([String]::IsNullOrEmpty($ExportPath))) {
+        $exportQR = $false
+    } elseif (-Not ($PsCmdlet.ParameterSetName -eq "CommandLineSecret")) {
         try {
             New-Item -Path $ExportPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
         } catch {
@@ -2789,10 +2792,19 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
             Throw "Could not find the path specified `"$ExportPath`""
         }
         Write-Verbose "Export Path `"$ExportPath`" configured."
+    } else {
+        $exportQR = $false
     }
     $userData = @()
     switch ($PsCmdlet.ParameterSetName) {
         "CommandLine" { 
+            $userData += [PSCustomObject]@{
+                Username   = $Username
+                DeviceName = $DeviceName
+                Secret     = $null
+            }
+        }
+        "CommandLineSecret" { 
             $userData += [PSCustomObject]@{
                 Username   = $Username
                 DeviceName = $DeviceName
@@ -2865,8 +2877,12 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
         }
         if ([String]::IsNullOrEmpty($item.Secret)) {
             $Output.NewSecret = Get-OTPSecret
+            if (-Not $exportQR -and ([String]::IsNullOrEmpty($ExportPath))) {
+                Write-Warning "The -ExportPath was not specified, QR-images will not be generated and exported!"
+            }
         } else {
-            $Output.NewSecret = $Secret
+            $Output.NewSecret = $item.Secret
+            $exportQR = $false
         }
         $DeviceSecrets += [PSCustomObject]@{
             DeviceName = $item.DeviceName
@@ -2928,7 +2944,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
             Write-Error "Error while saving User Attributes for username `"$($item.Username)`", $($_.Exception.Message)"
             Break
         }
-        if (-Not ($PsCmdlet.ParameterSetName -eq "CommandLineSecret")) {
+        if ($exportQR) {
             try {
                 $PNGFileName = Join-Path -Path $ExportPath -ChildPath "$($ADUser.UserPrincipalName)_$($DeviceName).png"
                 Write-Verbose "Exporting QR code to `"$PNGFileName`""
@@ -2939,6 +2955,8 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                 Write-Error "Error while exporting the QR Image for username `"$($item.Username)`", $($_.Exception.Message)"
                 Break
             }
+        } else {
+            Write-Verbose "Nothing was exported"
         }
         $Output.Success = $true
         Write-Verbose "Finished with username `"$($item.Username)`""
@@ -2957,7 +2975,6 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
     Write-Verbose "Load: PresentationFramework"
     #Add-Type -AssemblyName PresentationFramework
     [void] [System.Reflection.Assembly]::LoadWithPartialName("PresentationFramework") 
-   
     if (-Not $NoHide) {
         $SW_HIDE, $SW_SHOW = 0, 5
         $TypeDef = '[DllImport("User32.dll")]public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'
@@ -4650,8 +4667,8 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # SIG # Begin signature block
 # MIIkrQYJKoZIhvcNAQcCoIIknjCCJJoCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDWiBXk4z+yDbbW
-# X7QGIw4bVsWWR/zzZWr0Jw92eXOw66CCHnAwggTzMIID26ADAgECAhAsJ03zZBC0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBZIRkTqh+96WMO
+# NDqcpPduVv92Ad3Pmqd40gA00TGFwKCCHnAwggTzMIID26ADAgECAhAsJ03zZBC0
 # i/247uUvWN5TMA0GCSqGSIb3DQEBCwUAMHwxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # ExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoT
 # D1NlY3RpZ28gTGltaXRlZDEkMCIGA1UEAxMbU2VjdGlnbyBSU0EgQ29kZSBTaWdu
@@ -4819,29 +4836,29 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # MSQwIgYDVQQDExtTZWN0aWdvIFJTQSBDb2RlIFNpZ25pbmcgQ0ECECwnTfNkELSL
 # /bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAA
 # oQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4w
-# DAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQg5Oe4zQmG4ydp4bRNyye0GAP9
-# 3kaofoRtmnWiOAXshLwwDQYJKoZIhvcNAQEBBQAEggEAbECth9Hfog0yKP32l0OY
-# YNO+6wzE/hKgd1+IRRfxNGzJdQ1wfbx4nbQMa8BcmMcAaxZ9qpA/qJkofYCIzQ4W
-# WmYq4Yqp5ggAgZ9aJw1QKk0ZSYnWs0vXUQYzfhV5r45cgkJDAR4kUa5vDbwfmEUq
-# NzDlwAkNxj7zRaWFcOZWOddmDdqKNaJcKXX8Y92tcI03una+xS2L5xC2Y7aJtjmY
-# WTku1OPXpb8SLt7bq15uypIXPFs71w9Ypby0b1JjGnYwvJGAy7uunzEBaZJtwsII
-# Qc2/yJ8fSM3aJ/cIGoLdeN+YUe9TIgfU5vw1xXkXD+MJxYNTSFxXFqjA5CaW3/up
-# kaGCA0wwggNIBgkqhkiG9w0BCQYxggM5MIIDNQIBATCBkjB9MQswCQYDVQQGEwJH
+# DAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgM/GiLzAVE0gcOcMJRhvwU1Ir
+# f9mbW/8INv5tUNHdUecwDQYJKoZIhvcNAQEBBQAEggEADKcTfx99Xp/SQoIBPdxz
+# QrxRdMu2rl9KA7uNr0440RH1Pe36EUFnb2gunXcR9ItNyZFPESEWdJHhUfcwQROC
+# ZvbnYOvEUEUWQ1n+o+/tS//dVmBID9AngFurNaVzHKS6vqEvMj9Gq5x5v6HzPPnl
+# Ww3WgtMjVrwV/IqXWtBjMos8qJUxq37FcQhgsz3qTAEw2R/lk6mmTpW/cJUpb/CE
+# U16xdURraGRkcc2KwW2S0hG/8/A6Cw3T8iuClNpBUzVC2HQGO3gkzUfyFqVIrZVr
+# cNKN69moAntB12uQLxVfZ1SvNzVr20GLEhKxOH/riBcLn6+5a4v7eMd2QjG0m7nT
+# uKGCA0wwggNIBgkqhkiG9w0BCQYxggM5MIIDNQIBATCBkjB9MQswCQYDVQQGEwJH
 # QjEbMBkGA1UECBMSR3JlYXRlciBNYW5jaGVzdGVyMRAwDgYDVQQHEwdTYWxmb3Jk
 # MRgwFgYDVQQKEw9TZWN0aWdvIExpbWl0ZWQxJTAjBgNVBAMTHFNlY3RpZ28gUlNB
 # IFRpbWUgU3RhbXBpbmcgQ0ECEQCMd6AAj/TRsMY9nzpIg41rMA0GCWCGSAFlAwQC
 # AgUAoHkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcN
-# MjExMjIzMTUzNzAxWjA/BgkqhkiG9w0BCQQxMgQwSZWn2oqMnQNviGL3dQLxFrYU
-# LLzamVI5gQ3wIttSv+h9VEGiZAnXZqvvh73NNkPbMA0GCSqGSIb3DQEBAQUABIIC
-# AGdTCp5B6p4UXMsNcbLBwwvQnDuKNDfYthJYGalhF6u8tHsRsr2840h4RyCovft9
-# QLm2jfCXT5oTbEVehFuRtIZSfAbyx8PjDJoUSQpOlGK7GU+GO/r2ddFELeICjZQJ
-# 8fhBTtAtg5lUh9pefuzOpriFziIpMo0pocfXbraJnvizXvnbCy5DhEbFar1y1e4/
-# AGrKnJGaja2oWa0H/hbQTRVs95qBJouRk0psB3VbgEHDcTu5qrlDT1nMfroDYNrz
-# IJ+M7zGQJ84O5159OAklMJsK52O+/rVuWXWEBcub9mM9/IM3R7arEbg/dJIP5B1S
-# VbuSRVUVLf7m2p6lgzXrv1rcjncdl71cFTIfNHO4raGvasrWk/H/WRQ4cRLW4wjE
-# TdnL0nLK3maQcBPI66AO465jR3OFqyT1/qO3G5ZU8YUvIc1LbrlNSxakuLuYjgUA
-# o96WdfwY/ByXUWb+KaSE6qVLWeGki4/koqtIxKCII+CQHwwrdL+O2ZcdXb0mSvjh
-# SB5/2ZPcKpTA8u4khEl/N9g/q5EJ2Nh6XspkZW7etZqz3PGVB65A2dkxPTiCEwMA
-# 1TVT4cVjQtHd668YxdD0T+LIqOhVm17IXIRn3ZecKQUYi2Dj3bd4GyyT5MzQ0KVP
-# rNaNoEHfCkie2b6WOVfldhkhwn0rQGNGQPTxtPVXFseV
+# MjExMjIzMTYyOTI5WjA/BgkqhkiG9w0BCQQxMgQwm6rVLzWwAobwVT/LiFsbrRgj
+# d+3KNEOCgG2iWUuMws8zL3gfzZ3UhssGiEKvtY4WMA0GCSqGSIb3DQEBAQUABIIC
+# ABvjEYhEtHsCIH9rJJ4B+tw8KU8G4tuYSpFlgYFdhqoMQMq97ng2loFJ2MNxFdi1
+# K8yF7gRNHtPBb2KxSl8qw8Xfz9ctYsK/FezJ4KbXhS6O3UFo+A3+48Gzo6jnKMso
+# OMMxat2yw86SoJqkAjiLIX5pr9y8IVhCp7wi9N4Ht4jZZ+gj+SUa6tAw6mjJUYWE
+# I1amkiSpHFbGuGSNTREBuP6EoeqycRjpBKAg1m2FvmR5NxuStQuAuy4raAXLws0A
+# 3JDcn2RhxGmKfRsSSoBu/SI5RODnbu9G7QfgBnPkh6KLZ3EAxhhK8+24ymHqh6gD
+# U8wrwRIgKprNoqDmhZqj9xuAXULu2cEHMB3tmnLi1XhOZa8pnjwvAJZWH4ttbiw4
+# TCYHVbCMi8NEHqmWL1jYB8DTn5mzDMXG3AOBTnLmVCxGqbX3cc4xd0Dni2oV+t3l
+# ViCdriQcj+f8iPPNc67dBlGr5lb8atJGFpoCMIo2jsfsrUUJNmogdZFR2rN6AKYy
+# YFnc4xNjyZnht0E74uHlKquGpvZEKSgC/4JwL3muwxVNmVK13mbXBVL77rHd0Cv5
+# ga+73gDURxQ/3QQ2TrlSBzsnSv7kcnqJ4VzOtswbZIH09UAysXbclzLPQPed3hoe
+# TuZKaZFHb9il1ARzCwEY6ae7zivPbp+IqO1iL4kPnpJC
 # SIG # End signature block
