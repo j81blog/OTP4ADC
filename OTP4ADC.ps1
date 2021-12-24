@@ -15,14 +15,34 @@
     The size for height and width for the generated QR image in pixels.
     Default, 300 
 .EXAMPLE
-    .\OTP4ADC.ps1
-    Run the script with no parameters
+    PS C:\>.\OTP4ADC.ps1
+    Run the script with no parameters, a GUI will be shown
 .EXAMPLE
-    .\OTP4ADC.ps1 -attribute "extensionAttribute1" -GatewayURI "gw.domain.com"
+    PS C:\>.\OTP4ADC.ps1 -attribute "extensionAttribute1" -GatewayURI "gw.domain.com"
     Run the script and use "extensionAttribute1" as attribute name and "gw.domain.com" as Gateway URI
+.EXAMPLE
+    PS C:\>.\OTP4ADC.ps1 -attribute "UserParameters" -GatewayURI "gw.domain.com" -Username john.doe@domain.com -DeviceName Mobile -ExportPath C:\Export
+    Adding a new token to user john.doe@domain.com with the name Mobile in attribute UserParameters
+    Returns the following data:
+
+    UserPrincipalName     NewSecret                  QRFileName                                  Success
+    -----------------     ---------                  ----------                                  -------
+    john.doe@domain.com   NMBIP7SKCPOFSVWUYD36VMJISM C:\Export\john.doe@domain.com_Mobile.png    True
+.EXAMPLE
+    PS C:\>.\OTP4ADC.ps1 -attribute "UserParameters" -GatewayURI "gw.domain.com" -ExportPath C:\Export -CsvPath C:\Script\Usernames.csv
+    This command will enumerate each entry from the csv and set a (new)secret.
+
+    Use a csv with the following header
+    "Username","DeviceName"
+
+    If you want to set your own secrets, you can use the following header
+    "Username","DeviceName","Secret"
+
+    Default Delimiter is a comma ",", specify the -Delimiter parameter de define a different one
+
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v0.5.0
+    Version   : v1.0.3
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -31,14 +51,19 @@
 #>
 
 [CmdletBinding(DefaultParameterSetName = "GUI")]
+[System.Diagnostics.CodeAnalysis.SuppressMessageAttribute("PSAvoidAssignmentToAutomaticVariable", "")]
 Param(
     [Parameter(ParameterSetName = "GUI")]
-    [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
+    [Parameter(ParameterSetName = "CommandLine", Mandatory)]
+    [Parameter(ParameterSetName = "CommandLineSecret", Mandatory)]
+    [Parameter(ParameterSetName = "FileImport", Mandatory)]
     [ValidateNotNullOrEmpty()]
     [String]$GatewayURI = "",
     
     [Parameter(ParameterSetName = "GUI")]
-    [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
+    [Parameter(ParameterSetName = "CommandLine", Mandatory)]
+    [Parameter(ParameterSetName = "CommandLineSecret", Mandatory)]
+    [Parameter(ParameterSetName = "FileImport", Mandatory)]
     [ValidateNotNullOrEmpty()]
     [String]$Attribute = "userParameters",
 
@@ -47,10 +72,14 @@ Param(
     
     [Parameter(ParameterSetName = "GUI")]
     [Parameter(ParameterSetName = "CommandLine")]
+    [Parameter(ParameterSetName = "CommandLineSecret")]
+    [Parameter(ParameterSetName = "FileImport")]
     [ValidateNotNullOrEmpty()]
     [Int]$QRSize = 300,
     
     [Parameter(ParameterSetName = "CommandLine")]
+    [Parameter(ParameterSetName = "CommandLineSecret")]
+    [Parameter(ParameterSetName = "FileImport")]
     [ValidateNotNullOrEmpty()]
     [ValidateSet("1", "2", "3")]
     [String]$TokenText = "2",
@@ -58,24 +87,56 @@ Param(
     [Parameter(ParameterSetName = "GUI")]
     [Switch]$Console,
 
-    [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
+    [Parameter(ParameterSetName = "CommandLine", Mandatory)]
+    [Parameter(ParameterSetName = "CommandLineSecret", Mandatory)]
     [String]$Username,
     
-    [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
+    [Parameter(ParameterSetName = "CommandLine", Mandatory)]
+    [Parameter(ParameterSetName = "CommandLineSecret", Mandatory)]
     [String]$DeviceName,
     
+    [Parameter(ParameterSetName = "CommandLineSecret", Mandatory)]
+    [String]$Secret,
+    
+    [Parameter(ParameterSetName = "FileImport")]
     [Parameter(ParameterSetName = "CommandLine")]
+    [Parameter(ParameterSetName = "CommandLineSecret")]
     [Switch]$ReplaceTokens,
     
-    [Parameter(ParameterSetName = "CommandLine", Mandatory = $true)]
+    [Parameter(ParameterSetName = "FileImport")]
+    [Parameter(ParameterSetName = "CommandLine", Mandatory)]
     [String]$ExportPath,
 
+    [Parameter(ParameterSetName = "FileImport")]
     [Parameter(ParameterSetName = "CommandLine")]
-    [String]$Thumbprint
+    [Parameter(ParameterSetName = "CommandLineSecret")]
+    [String]$Thumbprint,
+
+    [Parameter(ParameterSetName = "FileImport", Mandatory)]
+    [ValidateScript({
+            if (-Not ($_ | Test-Path) ) {
+                throw "File or folder does not exist"
+            }
+            if (-Not ($_ | Test-Path -PathType Leaf) ) {
+                throw "The Path argument must be a file. Folder paths are not allowed."
+            }
+            if ($_ -notmatch "(\.csv)") {
+                throw "The file specified in the path argument must be of type csv"
+            }
+            return $true
+        })]
+    [System.IO.FileInfo]$CsvPath,
+
+    [Parameter(ParameterSetName = "FileImport")]
+    [ValidateNotNullOrEmpty()]
+    [ValidateSet(",", ";", "`t", " ", "|")]
+    [String]$Delimiter = ","
 )
-$AppVersion = "v0.5.0"
+
+$AppVersion = "v1.0.3"
 
 #region functions
+
 function Write-ToLogFile {
     <#
 .SYNOPSIS
@@ -261,8 +322,6 @@ function Write-ToLogFile {
         [Switch]$NewLog
     )
     begin {
-        #Determine root path
-        $RootPath = $(if ($psISE) { Split-Path -Path $psISE.CurrentFile.FullPath } else { $(if ($Script:PSScriptRoot.Length -gt 0) { $Script:PSScriptRoot } else { $Script:pwd.Path }) })
         # Set Message Type to Informational if nothing is defined.
         if ((-Not $I) -and (-Not $W) -and (-Not $E) -and (-Not $D) -and (-Not $Block) -and (-Not $WriteHeader)) {
             $I = $true
@@ -484,7 +543,7 @@ $($URI.AbsoluteUri)
 
     $generator = New-Object -TypeName QRCoder.QRCodeGenerator
     $data = $generator.CreateQrCode($payload, 'Q')
-    $code = new-object -TypeName QRCoder.PngByteQRCode -ArgumentList ($data)
+    $code = New-Object -TypeName QRCoder.PngByteQRCode -ArgumentList ($data)
     $byteArray = $code.GetGraphic($Width)
     
     #Due to bug in output size, we resize the QR
@@ -515,31 +574,6 @@ $($URI.AbsoluteUri)
     Write-Verbose "Ending function   : New-QRTOTPImage"
     if ($OutStream) { return $MemoryStream }
 }
-
-<# ToDo Remove / clean code
-function Get-OTPSecret {
-    [cmdletbinding()]
-    param(
-        [Int]$Length = 40
-    )
-    $base32Secret = $null
-    while ($null -eq $base32Secret) {
-        try{
-            $hexSecret = ((($Length) | ForEach-Object { ((1..$_) | ForEach-Object { ('{0:X}' -f (Get-random(16))) }) }) -Join "").ToLower()
-            $byteSecret = $hexSecret -replace '^0x', '' -split "(?<=\G\w{2})(?=\w{2})" | ForEach-Object { [Convert]::ToByte( $_, 16 ) }
-            $byteArrayAsBinaryString = -join $byteSecret.ForEach{ [Convert]::ToString($_, 2).PadLeft(8, '0') }
-            $base32Secret = [regex]::Replace($byteArrayAsBinaryString, '.{5}', {
-                    param($Match)
-                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'[[Convert]::ToInt32($Match.Value, 2)]
-                })
-        } catch {
-            $base32Secret = $null
-        }
-    }
-    return $base32Secret
-}  
-
-#>
 
 function Get-OTPSecret {
     [cmdletbinding()]
@@ -783,6 +817,23 @@ function Search-User {
     }
     Write-Verbose "Ending function   : Search-User"
     return $Results 
+}
+
+function Invoke-SettingsChangedQuestion {
+    Write-Verbose "Starting function : Invoke-SettingsChangedQuestion"
+    $result = [System.Windows.MessageBox]::Show("There are unsaved settings!`nDo you want to continue and loose the made changes?", "Unsaved Settings", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Exclamation)
+    $output = $false
+    switch ($result.ToString()) {
+        "Yes" {
+            Import-GUISettings
+            $SyncedVariables.SettingsChanged = $false
+            $output = $true
+        }
+        "No" { <#Do nothing#> } 
+        Default { <#Do nothing#> }
+    }
+    return $output
+    Write-Verbose "Ending function   : Invoke-SettingsChangedQuestion"
 }
 
 function Reset-GUIUser {
@@ -1172,7 +1223,7 @@ function Import-ModulesGUI {
             if ($SyncHash.WPFControl_gbUser.IsEnabled) { $SyncHash.WPFControl_gbUser.IsEnabled = $false }
             $null = [System.Windows.MessageBox]::Show("Error while loading the Native AD Option!", "Native AD Option", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
         }
-    } elseif (get-module -ListAvailable  ActiveDirectory -ErrorAction SilentlyContinue) {
+    } elseif (Get-Module -ListAvailable  ActiveDirectory -ErrorAction SilentlyContinue) {
         try {
             Write-Verbose "Loading ActiveDirectory Module"
             Import-Module -Name ActiveDirectory -Verbose:$False
@@ -1199,9 +1250,10 @@ function Import-ModulesGUI {
     Import-QRModule
     Write-Verbose "Ending function   : Import-ModulesGUI"
 }
+
 function Import-ModulesCommandLine {
     Write-Verbose "Starting function : Import-ModulesCommandLine"
-    if (get-module -ListAvailable  ActiveDirectory -ErrorAction SilentlyContinue) {
+    if (Get-Module -ListAvailable  ActiveDirectory -ErrorAction SilentlyContinue) {
         Write-Verbose "Loading ActiveDirectory Module"
         Import-Module -Name ActiveDirectory -Verbose:$False
     } else {
@@ -1289,6 +1341,19 @@ function Import-GUISettings {
         $Script:LDAPNativeFunctions = $SyncedVariables.Settings.LDAPSettings.LDAPNativeFunctions
     }
 
+    if ([String]::IsNullOrEmpty($SyncedVariables.Settings.ChangeSecretDisabled)) {
+        if (-Not ($SyncedVariables.Settings | Get-Member -Name ChangeSecretDisabled -ErrorAction SilentlyContinue)) {
+            $SyncedVariables.Settings | Add-Member -Type NoteProperty -Name ChangeSecretDisabled -Value $true
+        }
+        $SyncHash.WPFControl_cbChangeSecretDisabled.IsChecked = $true
+        $SyncHash.WPFControl_tbSecret.IsReadOnly = $true
+    } else {
+        $SyncHash.WPFControl_cbChangeSecretDisabled.IsChecked = $SyncedVariables.Settings.ChangeSecretDisabled
+        $SyncHash.WPFControl_tbSecret.IsReadOnly = $SyncedVariables.Settings.ChangeSecretDisabled
+    }
+
+
+
     if ([String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.EncryptionEnabled)) {
         if (-Not ($SyncedVariables.Settings.LDAPSettings | Get-Member -Name EncryptionEnabled -ErrorAction SilentlyContinue)) {
             $SyncedVariables.Settings.LDAPSettings | Add-Member -Type NoteProperty -Name EncryptionEnabled -Value $false
@@ -1368,6 +1433,7 @@ function Export-GUISettings {
     try {
         $SyncedVariables.Settings.GatewayURI = $SyncHash.WPFControl_tbGatewayURI.Text
         $SyncedVariables.Settings.QRSize = $SyncHash.WPFControl_tbQRSize.Text
+        $SyncedVariables.Settings.ChangeSecretDisabled = $SyncHash.WPFControl_cbChangeSecretDisabled.IsChecked
         $SyncedVariables.Settings.LDAPSettings.LDAPServer = $SyncHash.WPFControl_tbLDAPServer.Text
         $SyncedVariables.Settings.LDAPSettings.LDAPPort = $SyncHash.WPFControl_tbLDAPPort.Text
         $SyncedVariables.Settings.LDAPSettings.LDAPUsername = $SyncHash.WPFControl_tbLDAPUsername.Text
@@ -1377,7 +1443,7 @@ function Export-GUISettings {
         $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled = $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsChecked
         $SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint = $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text
         $SyncedVariables.Settings.AppVersion = $Script:AppVersion
-        Export-CliXml -Path $Path -InputObject $SyncedVariables.Settings -Force
+        Export-Clixml -Path $Path -InputObject $SyncedVariables.Settings -Force
         Update-Gui
         Write-Verbose "Settings saved"
     } catch {
@@ -1385,10 +1451,10 @@ function Export-GUISettings {
     }
 }
 
-function End-GUIApplication {
+function Stop-GUIApplication {
     [CmdletBinding()]
     param ()
-    Write-Verbose "Starting function : End-GUIApplication"
+    Write-Verbose "Starting function : Stop-GUIApplication"
     try {
         if ($SyncedVariables.IsGUI) {
             $SyncHash.Form.Close()
@@ -1497,7 +1563,7 @@ function Get-AdsiADDomain {
         })
     Write-Verbose "Ending function   : Get-AdsiADDomain"
 }
-        
+
 function Test-AdsiADConnection {
     [CmdletBinding()]
     Param(
@@ -1543,7 +1609,7 @@ function Test-AdsiADConnection {
     Write-Verbose "Ending function   : Test-AdsiADConnection [$result]"
     Write-Output $result
 }
-   
+
 function Get-AdsiADUser {
     [CmdletBinding()]
     Param(
@@ -1604,7 +1670,7 @@ function Get-AdsiADUser {
     $adSearcher.SizeLimit = "$SearchLimit"
     $Attributes += @("Name", "UserPrincipalName", "SamAccountName", "Sn", "GivenName", "distinguishedName")
     $Attributes = $Attributes | Select-Object -Unique
-    foreach ($item in $Attributes) { $adSearcher.PropertiesToLoad.Add($item) | out-null } 
+    foreach ($item in $Attributes) { $adSearcher.PropertiesToLoad.Add($item) | Out-Null } 
                 
     $Users = $adSearcher.FindAll()
     foreach ($User in $Users) {
@@ -1612,7 +1678,7 @@ function Get-AdsiADUser {
     }
     Write-Verbose "Ending function   : Get-AdsiADUser"
 }
-   
+
 function Set-AdsiADUser {
     [CmdletBinding()]
     Param(
@@ -1670,6 +1736,7 @@ function Set-AdsiADUser {
 #endregion ADSI Functions
 
 #region Encryption
+
 function Protect-Message {
     [CmdletBinding(DefaultParameterSetName = 'Key')]
     param (
@@ -1730,6 +1797,7 @@ function Invoke-IncrementBytes {
     }
     Write-Verbose "Ending function   : Invoke-IncrementBytes"
 }
+
 function Invoke-XorBytes {
     [CmdletBinding()]
     param (
@@ -1752,10 +1820,7 @@ function Get-CertificateFromStore {
         [Parameter(Position = 0)]
         [String]$Thumbprint
     )
-    $result = Get-Childitem -Path Cert:\ -Recurse | Where-Object { $_.Thumbprint -eq $Thumbprint } | Select-Object -First 1
-    #$certificateStore = New-Object System.Security.Cryptography.X509Certificates.X509Store([System.Security.Cryptography.X509Certificates.StoreName]::My, [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-    #$certificateStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
-    #$storeCertificate = $certificateStore.Certificates | Where-Object { $_.Thumbprint -eq $Thumbprint }
+    $result = Get-ChildItem -Path Cert:\ -Recurse | Where-Object { $_.Thumbprint -eq $Thumbprint } | Select-Object -First 1
     Write-Output $result
 }
 
@@ -1807,7 +1872,6 @@ function Get-HashSha1 {
     Write-Output $result
     Write-Verbose "Ending function   : Get-HashSha1"# [$($cert.GetCertHash())]"
 }
-
 
 function Test-CertificateOnSecret {
     [CmdletBinding(DefaultParameterSetName = "CertThumbprint")]
@@ -2687,6 +2751,7 @@ function Invoke-StartEncryption {
     $SyncHash.WPFControl_btnConversionStart.IsEnabled = $true
     Write-Verbose "Ending function   : Invoke-StartEncryption"
 }
+
 function ConvertFrom-HashTable {
     [CmdletBinding()]
     param(
@@ -2704,7 +2769,8 @@ function ConvertFrom-HashTable {
 
 #endregion functions
 
-if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
+if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetName -eq "CommandLineSecret") -or ($PsCmdlet.ParameterSetName -eq "FileImport")) {
+    $exportQR = $true
     Write-Verbose "Running CommandLine mode!"
     $SyncedVariables = [hashtable]::Synchronized(@{ })
     $SyncedVariables.IsGUI = $false
@@ -2714,151 +2780,188 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
     } elseif (-not [String]::IsNullOrEmpty($Thumbprint)) {
         Write-Verbose "A Thumbprint was provided, saving secrets encrypted."
     }
-    try {
-        New-Item -Path $ExportPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-    } catch {
-        Throw "Could not create the path specified `"$ExportPath`""
-    }
-    if (-Not (Test-Path -Path $ExportPath)) {
-        Throw "Could not find the path specified `"$ExportPath`""
-    }
-    Write-Verbose "Export Path `"$ExportPath`" configured."
-    $Output = [PSCustomObject]@{
-        UserPrincipalName = $null
-        NewSecret         = $null
-        QRFileName        = $null
-        Success           = $false
-    }
-    if (-Not [String]::IsNullOrEmpty($Username)) {
-        $ADUser = Get-ADUser -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$Username*)(UserPrincipalName=*$Username*)(SamAccountName=*$Username*)))" -Properties @($Attribute) | ForEach-Object {
-            $Username = $_.SamAccountName
-            [PSCustomObject]@{
-                SamAccountName    = $Username
-                GivenName         = $_.GivenName
-                Surname           = $_.Surname
-                Name              = $_.Name
-                Attribute         = $_."$Attribute"
-                DistinguishedName = $_.DistinguishedName
-                UserPrincipalName = $_.UserPrincipalName
-            }
+    if ($PsCmdlet.ParameterSetName -eq "FileImport" -and ([String]::IsNullOrEmpty($ExportPath))) {
+        $exportQR = $false
+    } elseif (-Not ($PsCmdlet.ParameterSetName -eq "CommandLineSecret")) {
+        try {
+            New-Item -Path $ExportPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+        } catch {
+            Throw "Could not create the path specified `"$ExportPath`""
         }
+        if (-Not (Test-Path -Path $ExportPath)) {
+            Throw "Could not find the path specified `"$ExportPath`""
+        }
+        Write-Verbose "Export Path `"$ExportPath`" configured."
     } else {
-        Throw "No user was found!"
+        $exportQR = $false
     }
-    
-    if ($ADUser.Count -gt 1) {
-        Write-Host "Multiple accounts found, please select only one!"
-        $ADUser | ForEach-Object {
-            Write-Host -ForegroundColor Yellow "Name: $($_.Name)`r`nSAM: $($_.SamAccountName)`r`nUPN: $($_.UserPrincipalName)`r`n"
+    $userData = @()
+    switch ($PsCmdlet.ParameterSetName) {
+        "CommandLine" { 
+            $userData += [PSCustomObject]@{
+                Username   = $Username
+                DeviceName = $DeviceName
+                Secret     = $null
+            }
         }
-        Throw "Multiple user accounts found"
+        "CommandLineSecret" { 
+            $userData += [PSCustomObject]@{
+                Username   = $Username
+                DeviceName = $DeviceName
+                Secret     = $Secret
+            }
+        }
+        "FileImport" { 
+            $userData += Get-Content -Path $CsvPath.Fullname -Raw | ConvertFrom-Csv -Delimiter $Delimiter
+        }
     }
-    $Output.UserPrincipalName = $ADUser.UserPrincipalName
-    Write-Verbose "$($ADUser | Out-String )"
-
-    $DeviceSecrets = @()
-    if (-Not $ReplaceTokens) {
-        if (Test-ValidEncryptedJson $ADUser.Attribute) {
-            Write-Verbose "Source Attribute: $Attribute is Encrypted"
-            if ([String]::IsNullOrEmpty($Thumbprint)) {
-                Throw "Source attribute `"$Attribute`" contains an encrypted token, please specify correct certificate Thumbprint!"
+    ForEach ($item in $userData) {
+        $Output = [PSCustomObject]@{
+            UserPrincipalName = $null
+            NewSecret         = $null
+            QRFileName        = $null
+            Success           = $false
+        }
+        if (-Not [String]::IsNullOrEmpty($item.Username)) {
+            $ADUser = Get-ADUser -LDAPFilter "(&(objectCategory=person)(objectClass=user)(|(Name=*$($item.Username)*)(UserPrincipalName=*$($item.Username)*)(SamAccountName=*$($item.Username)*)))" -Properties @($Attribute) | ForEach-Object {
+                $Username = $_.SamAccountName
+                [PSCustomObject]@{
+                    SamAccountName    = $Username
+                    GivenName         = $_.GivenName
+                    Surname           = $_.Surname
+                    Name              = $_.Name
+                    Attribute         = $_."$Attribute"
+                    DistinguishedName = $_.DistinguishedName
+                    UserPrincipalName = $_.UserPrincipalName
+                }
             }
-            try {
-                $DeviceSecrets += ConvertFrom-EncryptedUserAttribute $ADUser.Attribute -Thumbprint $Thumbprint
-            } catch {
-                Throw "Certificate thumbprint `"$Thumbprint`" possibly not valid!"
-            }
-        } elseif (Test-ValidClearTextSecret $ADUser.Attribute) {
-            Write-Verbose "Source Attribute: $Attribute is ClearText"
-            $DeviceSecrets += ConvertFrom-ClearTextUserAttribute $ADUser.Attribute
         } else {
-            Write-Verbose "Source Attribute: $Attribute is UNKNOWN: $($ADUser.Attribute)"
-            $DeviceSecrets = @()
+            Write-Error "No user was found for entry `"$($item.Username)`"!"
+            Break
         }
-    } else {
-        Write-Verbose "ReplaceTokens was specified, overwriting all Tokens for user!"
-    }
-
-    if ($DeviceName -in $DeviceSecrets.DeviceName) {
-        Throw "Device name `"$DeviceName`" is already in use, specify a unique name! In use: `"$($DeviceSecrets.DeviceName -Join '", "')`""
-    }
-    
-    $Output.NewSecret = Get-OTPSecret
-
-    $DeviceSecrets += [PSCustomObject]@{
-        DeviceName = $DeviceName
-        Secret     = $Output.NewSecret
-    }
-
-    Write-Verbose "$($DeviceSecrets | Out-String )"
-
-    Write-Verbose "$TokenURI"
-    try {
-        $OTPUri = "otpauth://totp/"
-        switch ($TokenText) {
-            "1" {
-                # username@domain.com
-                $OTPUri += [Uri]::EscapeDataString($('{0}' -f $ADUser.UserPrincipalName))
-                Break
+        if ($ADUser.Count -gt 1) {
+            Write-Warning "Multiple accounts found for username `"$($item.Username)`", please select only one!"
+            $ADUser | ForEach-Object {
+                Write-Warning "Name: $($_.Name)`r`nSAM: $($_.SamAccountName)`r`nUPN: $($_.UserPrincipalName)`r`n"
             }
-            "2" {
-                #username@gateway.domain.com
-                $OTPUri += [Uri]::EscapeDataString($('{0}@{1}' -f $ADUser.SamAccountName, $GatewayURI))
-                Break
-            }
-            "3" {
-                #username@domain.com@gateway.domain.com
-                $OTPUri += [Uri]::EscapeDataString($('{0}@{1}' -f $ADUser.UserPrincipalName, $GatewayURI ))
-                Break
-            }
-            Default {
-                $OTPUri += [Uri]::EscapeDataString($('{0}' -f $ADUser.UserPrincipalName))
-                Break
-            }
+            Write-Error "Multiple user accounts found"
+            Break
         }
-        
-        $OTPUri += "?secret={0}&device={1}" -f $Output.NewSecret, $DeviceName
-        Write-Verbose "OTP Uri: $OTPUri"
-        $QRImage = New-QRTOTPImage -URI $OTPUri -OutStream
-    
-    } catch {
-        $Output.NewSecret = $null
-        Write-Output $Output
-        Throw "Error while generating QR Image, $($_.Exception.Message)"
-    }
-    try {
-        $DistinguishedName = $ADUser.DistinguishedName
-        Write-Verbose "User: $DistinguishedName"
-        if ($DeviceSecrets.Count -gt 0) {
-            if ([String]::IsNullOrEmpty($Thumbprint)) {
-                $NewOTPString = ConvertTo-ClearTextUserAttribute -object $DeviceSecrets
+        $Output.UserPrincipalName = $ADUser.UserPrincipalName
+        Write-Verbose "$($ADUser | Out-String )"
+        $DeviceSecrets = @()
+        if (-Not $ReplaceTokens) {
+            if (Test-ValidEncryptedJson $ADUser.Attribute) {
+                Write-Verbose "Source Attribute: $Attribute is Encrypted"
+                if ([String]::IsNullOrEmpty($Thumbprint)) {
+                    Throw "Source attribute `"$Attribute`" contains an encrypted token, please specify correct certificate Thumbprint!"
+                }
+                try {
+                    $DeviceSecrets += ConvertFrom-EncryptedUserAttribute $ADUser.Attribute -Thumbprint $Thumbprint
+                } catch {
+                    Throw "Certificate thumbprint `"$Thumbprint`" possibly not valid!"
+                }
+            } elseif (Test-ValidClearTextSecret $ADUser.Attribute) {
+                Write-Verbose "Source Attribute: $Attribute is ClearText"
+                $DeviceSecrets += ConvertFrom-ClearTextUserAttribute $ADUser.Attribute
             } else {
-                $NewOTPString = ConvertTo-EncryptedUserAttribute -object $DeviceSecrets -Thumbprint $Thumbprint
+                Write-Verbose "Source Attribute: $Attribute is UNKNOWN: $($ADUser.Attribute)"
+                $DeviceSecrets = @()
             }
-            Write-Verbose "New OTP AD User String: `"$NewOTPString`""
-            Set-ADUser -Identity $DistinguishedName -Replace @{ "$Attribute" = $NewOTPString } -ErrorAction Stop
         } else {
-            Write-Verbose "No OTP for user, save empty string"
-            $NewOTPString = $null
-            Set-ADUser -Identity $DistinguishedName -Clear @("$Attribute") -ErrorAction Stop
+            Write-Verbose "ReplaceTokens was specified, overwriting all Tokens for user!"
         }
-    } catch {
-        $Output.NewSecret = $null
+        if ($item.DeviceName -in $DeviceSecrets.DeviceName) {
+            Write-Error "Device name `"$($item.DeviceName)`" is already in use for username `"$($item.Username)`", specify a unique name! In use: `"$($DeviceSecrets.DeviceName -Join '", "')`""
+            Break
+        }
+        if ([String]::IsNullOrEmpty($item.Secret)) {
+            $Output.NewSecret = Get-OTPSecret
+            if (-Not $exportQR -and ([String]::IsNullOrEmpty($ExportPath))) {
+                Write-Warning "The -ExportPath was not specified, QR-images will not be generated and exported!"
+            }
+        } else {
+            $Output.NewSecret = $item.Secret
+            $exportQR = $false
+        }
+        $DeviceSecrets += [PSCustomObject]@{
+            DeviceName = $item.DeviceName
+            Secret     = $Output.NewSecret
+        }
+        Write-Verbose "$($DeviceSecrets | Out-String )"
+        Write-Verbose "$TokenURI"
+        try {
+            $OTPUri = "otpauth://totp/"
+            switch ($TokenText) {
+                "1" {
+                    # username@domain.com
+                    $OTPUri += [Uri]::EscapeDataString($('{0}' -f $ADUser.UserPrincipalName))
+                    Break
+                }
+                "2" {
+                    #username@gateway.domain.com
+                    $OTPUri += [Uri]::EscapeDataString($('{0}@{1}' -f $ADUser.SamAccountName, $GatewayURI))
+                    Break
+                }
+                "3" {
+                    #username@domain.com@gateway.domain.com
+                    $OTPUri += [Uri]::EscapeDataString($('{0}@{1}' -f $ADUser.UserPrincipalName, $GatewayURI ))
+                    Break
+                }
+                Default {
+                    $OTPUri += [Uri]::EscapeDataString($('{0}' -f $ADUser.UserPrincipalName))
+                    Break
+                }
+            }
+            $OTPUri += "?secret={0}&device={1}" -f $Output.NewSecret, $DeviceName
+            Write-Verbose "OTP Uri: $OTPUri"
+            $QRImage = New-QRTOTPImage -URI $OTPUri -OutStream
+        } catch {
+            $Output.NewSecret = $null
+            Write-Output $Output
+            Write-Error "Error while generating QR Image for username `"$($item.Username)`", $($_.Exception.Message)"
+            Break
+        }
+        try {
+            $DistinguishedName = $ADUser.DistinguishedName
+            Write-Verbose "User: $DistinguishedName"
+            if ($DeviceSecrets.Count -gt 0) {
+                if ([String]::IsNullOrEmpty($Thumbprint)) {
+                    $NewOTPString = ConvertTo-ClearTextUserAttribute -object $DeviceSecrets
+                } else {
+                    $NewOTPString = ConvertTo-EncryptedUserAttribute -object $DeviceSecrets -Thumbprint $Thumbprint
+                }
+                Write-Verbose "New OTP AD User String: `"$NewOTPString`""
+                Set-ADUser -Identity $DistinguishedName -Replace @{ "$Attribute" = $NewOTPString } -ErrorAction Stop
+            } else {
+                Write-Verbose "No OTP for user, save empty string"
+                $NewOTPString = $null
+                Set-ADUser -Identity $DistinguishedName -Clear @("$Attribute") -ErrorAction Stop
+            }
+        } catch {
+            $Output.NewSecret = $null
+            Write-Output $Output
+            Write-Error "Error while saving User Attributes for username `"$($item.Username)`", $($_.Exception.Message)"
+            Break
+        }
+        if ($exportQR) {
+            try {
+                $PNGFileName = Join-Path -Path $ExportPath -ChildPath "$($ADUser.UserPrincipalName)_$($DeviceName).png"
+                Write-Verbose "Exporting QR code to `"$PNGFileName`""
+                [System.IO.File]::WriteAllBytes($PNGFileName, $($QRImage.ToArray()))
+                $Output.QRFileName = $PNGFileName
+            } catch {
+                Write-Output $Output
+                Write-Error "Error while exporting the QR Image for username `"$($item.Username)`", $($_.Exception.Message)"
+                Break
+            }
+        } else {
+            Write-Verbose "Nothing was exported"
+        }
+        $Output.Success = $true
+        Write-Verbose "Finished with username `"$($item.Username)`""
         Write-Output $Output
-        Throw "Error while saving User Attributes, $($_.Exception.Message)"
     }
-    try {
-        $PNGFileName = Join-Path -Path $ExportPath -ChildPath "$($ADUser.UserPrincipalName)_$($DeviceName).png"
-        Write-Verbose "Exporting QR code to `"$PNGFileName`""
-        [System.IO.File]::WriteAllBytes($PNGFileName, $($QRImage.ToArray()))
-        $Output.QRFileName = $PNGFileName
-    } catch {
-        Write-Output $Output
-        Throw "Error while exporting the QR Image, $($_.Exception.Message)"
-    }
-    $Output.Success = $true
-    Write-Verbose "Finished"
-    Write-Output $Output
 } else {
     #Load Assemblies
     Write-Verbose "Running in GUI mode!"
@@ -2872,7 +2975,6 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
     Write-Verbose "Load: PresentationFramework"
     #Add-Type -AssemblyName PresentationFramework
     [void] [System.Reflection.Assembly]::LoadWithPartialName("PresentationFramework") 
-   
     if (-Not $NoHide) {
         $SW_HIDE, $SW_SHOW = 0, 5
         $TypeDef = '[DllImport("User32.dll")]public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'
@@ -2900,6 +3002,7 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
             LDAPTokenSecretEncryptionCertificateSource = "Store" #Values: Store, PEM
         }
     }
+    $SyncedVariables.Is64BitProcess = [Environment]::Is64BitProcess
     $SyncedVariables.IsGUI = $true
     $SyncedVariables.SettingsFilename = Join-Path -Path $env:APPDATA -ChildPath "OTP4ADC\Settings.xml"
     New-Item -Path $(Split-Path -Path $SyncedVariables.SettingsFilename -Parent) -ItemType Directory -Force | Out-Null
@@ -2909,6 +3012,7 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
     $SyncedVariables.OTPLength = 6
     $SyncedVariables.TokenText = "2"
     $SyncedVariables.CleanGUIUser = $false
+    $SyncedVariables.SettingsChanged = $false
     $SyncHash.Host = $host
     Write-Verbose "HashTables created"
     $RunSpace = [RunSpaceFactory]::CreateRunspace()
@@ -2949,283 +3053,912 @@ if ($PsCmdlet.ParameterSetName -eq "CommandLine") {
 
     $InputXML = @"
 <Window x:Class="OTP4ADC.MainWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:OTP4ADC"
-        mc:Ignorable="d" 
-        Title="OTP4ADC" SizeToContent="WidthAndHeight" ResizeMode="NoResize" Height="Auto" Width="Auto" WindowStartupLocation="CenterOwner">
-    <Grid Margin="2" >
-        <TabControl >
-            <TabItem Header="OTP">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <GroupBox Name="gbUser" Grid.Row="0" Grid.Column="0" Grid.RowSpan="2" Header="User" Height="Auto" Margin="2" Width="Auto">
-                        <Grid Margin="3">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="135"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <Label Name="lblUsername" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="80" Margin="2" Content="Username" />
-                            <TextBox Name="tbUsername" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the Username or part of the username" TabIndex="10" />
-                            <Button Name="btnSearch" Grid.Row="0" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Search" Width="100" Height="Auto" TabIndex="20" ToolTip="Search for user" />
-                            <ListView Name="lvUsernames" Grid.Row="1" Grid.Column="1" Grid.RowSpan="2" VerticalContentAlignment="Top" Margin="2" Height="150" Width="320" FontSize="8" SelectionMode="Single" TabIndex="30" >
-                                <ListView.View>
-                                    <GridView>
-                                        <GridViewColumn Header="SamAccountName" DisplayMemberBinding="{Binding SamAccountName}" Width="70"/>
-                                        <GridViewColumn Header="UPN" DisplayMemberBinding="{Binding UserPrincipalName}" Width="140"/>
-                                        <GridViewColumn Header="GivenName" DisplayMemberBinding="{Binding GivenName}" Width="50"/>
-                                        <GridViewColumn Header="Surname" DisplayMemberBinding="{Binding Surname}" Width="50"/>
-                                    </GridView>
-                                </ListView.View>
-                            </ListView>
-                            <Button Name="btnClear" Grid.Row="1" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Clear" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Clear all settings"  />
-                            <Label Name="lblAttribute" Grid.Row="3" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Top" Margin="2" Content="User Attribute" Width="90" />
-                            <TextBox Name="tbAttribute" Grid.Row="3" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Can be pre-configured by starting the application with the -Attribute '&lt;AD Attribute&gt;' parameter, if not configured it uses the default 'userParameters'" />
-                            <Label Name="lblOtp" Grid.Row="4" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Top" Margin="2" Content="OTP Secrets" Width="90"  VerticalAlignment="Top"/>
-                            <ListView Name="lvOtps" Grid.Row="4" Grid.Column="1" Grid.RowSpan="3" VerticalContentAlignment="Top" Margin="2"  Width="320" FontSize="10" SelectionMode="Single" TabIndex="40" Height="100"  >
-                                <ListView.View>
-                                    <GridView>
-                                        <GridViewColumn Header="Device Name" DisplayMemberBinding="{Binding DeviceName}" Width="100"/>
-                                        <GridViewColumn Header="Secret" DisplayMemberBinding="{Binding Secret}" Width="210"/>
-                                    </GridView>
-                                </ListView.View>
-                            </ListView>
-                            <StackPanel Grid.Row="4" Grid.Column="2" Grid.RowSpan="3" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="0">
-                                <Button Name="btnDeleteOtpSecret" VerticalContentAlignment="Center" Margin="2" Content="Delete" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Delete the selected secret" />
-                                <Button Name="btnSaveOtp" VerticalContentAlignment="Center" Margin="2" Content="Save" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Save the current secret(s) to the user account" />
-                                <Button Name="btnExportPosh" VerticalContentAlignment="Center" Margin="2" Content="Export PoSH" Width="100" VerticalAlignment="Top" Height="27" ToolTip="Export the PowerShell command to make the necessary changes." />
-                            </StackPanel>
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:local="clr-namespace:OTP4ADC"
+    mc:Ignorable="d"
+    Title="OTP4ADC"
+    SizeToContent="WidthAndHeight"
+    ResizeMode="NoResize"
+    Height="Auto"
+    Width="Auto"
+    WindowStartupLocation="CenterOwner">
+<Grid Margin="2">
+    <TabControl Name="tcOTP4ADC">
+        <TabItem Header="OTP">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <GroupBox Name="gbUser"
+                          Grid.Row="0"
+                          Grid.Column="0"
+                          Grid.RowSpan="2"
+                          Header="User"
+                          Height="Auto"
+                          Margin="2"
+                          Width="Auto">
+                    <Grid Margin="3">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Label Name="lblUsername"
+                               Grid.Row="0"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="80"
+                               Margin="2"
+                               Content="Username" />
+                        <TextBox Name="tbUsername"
+                                 Grid.Row="0"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 Width="320"
+                                 ToolTip="Enter the Username or part of the username"
+                                 TabIndex="10" />
+                        <Button Name="btnSearch"
+                                Grid.Row="0"
+                                Grid.Column="2"
+                                VerticalContentAlignment="Center"
+                                Margin="2"
+                                Content="Search"
+                                Width="100"
+                                Height="Auto"
+                                TabIndex="20"
+                                ToolTip="Search for user" />
+                        <ListView Name="lvUsernames"
+                                  Grid.Row="1"
+                                  Grid.Column="1"
+                                  Grid.RowSpan="2"
+                                  VerticalContentAlignment="Top"
+                                  Margin="2"
+                                  Height="150"
+                                  Width="320"
+                                  FontSize="8"
+                                  SelectionMode="Single"
+                                  TabIndex="30">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="SamAccountName"
+                                                    DisplayMemberBinding="{Binding SamAccountName}"
+                                                    Width="70" />
+                                    <GridViewColumn Header="UPN"
+                                                    DisplayMemberBinding="{Binding UserPrincipalName}"
+                                                    Width="140" />
+                                    <GridViewColumn Header="GivenName"
+                                                    DisplayMemberBinding="{Binding GivenName}"
+                                                    Width="50" />
+                                    <GridViewColumn Header="Surname"
+                                                    DisplayMemberBinding="{Binding Surname}"
+                                                    Width="50" />
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                        <Button Name="btnClear"
+                                Grid.Row="1"
+                                Grid.Column="2"
+                                VerticalContentAlignment="Center"
+                                Margin="2"
+                                Content="Clear"
+                                Width="100"
+                                VerticalAlignment="Top"
+                                Height="27"
+                                ToolTip="Clear all settings" />
+                        <Label Name="lblAttribute"
+                               Grid.Row="3"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Top"
+                               Margin="2"
+                               Content="User Attribute"
+                               Width="90" />
+                        <TextBox Name="tbAttribute"
+                                 Grid.Row="3"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 Width="320"
+                                 ToolTip="Can be pre-configured by starting the application with the -Attribute '&lt;AD Attribute&gt;' parameter, if not configured it uses the default 'userParameters'" />
+                        <Label Name="lblOtp"
+                               Grid.Row="4"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Top"
+                               Margin="2"
+                               Content="OTP Secrets"
+                               Width="90"
+                               VerticalAlignment="Top" />
+                        <ListView Name="lvOtps"
+                                  Grid.Row="4"
+                                  Grid.Column="1"
+                                  Grid.RowSpan="3"
+                                  VerticalContentAlignment="Top"
+                                  Margin="2"
+                                  Width="320"
+                                  FontSize="10"
+                                  SelectionMode="Single"
+                                  TabIndex="40"
+                                  Height="100">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Device Name"
+                                                    DisplayMemberBinding="{Binding DeviceName}"
+                                                    Width="100" />
+                                    <GridViewColumn Header="Secret"
+                                                    DisplayMemberBinding="{Binding Secret}"
+                                                    Width="210" />
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                        <StackPanel Grid.Row="4"
+                                    Grid.Column="2"
+                                    Grid.RowSpan="3"
+                                    HorizontalAlignment="Stretch"
+                                    VerticalAlignment="Stretch"
+                                    Margin="0">
+                            <Button Name="btnDeleteOtpSecret"
+                                    VerticalContentAlignment="Center"
+                                    Margin="2"
+                                    Content="Delete"
+                                    Width="100"
+                                    VerticalAlignment="Top"
+                                    Height="27"
+                                    ToolTip="Delete the selected secret" />
+                            <Button Name="btnSaveOtp"
+                                    VerticalContentAlignment="Center"
+                                    Margin="2"
+                                    Content="Save"
+                                    Width="100"
+                                    VerticalAlignment="Top"
+                                    Height="27"
+                                    ToolTip="Save the current secret(s) to the user account" />
+                            <Button Name="btnExportPosh"
+                                    VerticalContentAlignment="Center"
+                                    Margin="2"
+                                    Content="Export PoSH"
+                                    Width="100"
+                                    VerticalAlignment="Top"
+                                    Height="27"
+                                    ToolTip="Export the PowerShell command to make the necessary changes." />
+                        </StackPanel>
+                    </Grid>
+                </GroupBox>
+                <GroupBox Grid.Row="0"
+                          Grid.Column="1"
+                          Grid.RowSpan="2"
+                          Header="QR"
+                          Height="Auto"
+                          Margin="2"
+                          Width="Auto">
+                    <Grid Margin="3">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Label Name="lbTokenUserText"
+                               Grid.Row="0"
+                               Grid.Column="0"
+                               Margin="2"
+                               Content=""
+                               VerticalAlignment="Center"
+                               HorizontalContentAlignment="left"
+                               VerticalContentAlignment="Center"
+                               Width="200"
+                               Visibility="Visible"
+                               FontWeight="Bold"
+                               FontSize="8" />
+                        <Image Name="ImgQR"
+                               Grid.Row="1"
+                               Grid.Column="0"
+                               Margin="2"
+                               Height="200"
+                               Width="200"
+                               Visibility="Visible"
+                               Stretch="UniformToFill"
+                               RenderTransformOrigin="0.5,0.5" />
+                        <Label Name="lblQR"
+                               Grid.Row="2"
+                               Grid.Column="0"
+                               Margin="2"
+                               Content=""
+                               VerticalAlignment="Bottom"
+                               HorizontalContentAlignment="Center"
+                               VerticalContentAlignment="Center"
+                               Visibility="Visible"
+                               FontWeight="Bold"
+                               FontSize="14" />
+                        <Button Name="btnExportQR"
+                                Grid.Row="3"
+                                Grid.Column="0"
+                                VerticalContentAlignment="Center"
+                                Margin="2"
+                                Content="Export QR"
+                                Width="100"
+                                VerticalAlignment="Bottom"
+                                Height="27"
+                                TabIndex="100"
+                                ToolTip="Export and save the QR code" />
+                    </Grid>
+                </GroupBox>
+                <GroupBox Grid.Row="2"
+                          Grid.Column="0"
+                          Grid.RowSpan="2"
+                          Header="OTP Secret"
+                          Height="Auto"
+                          Margin="2"
+                          Width="Auto">
+                    <Grid Margin="3">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Label Name="lblSecret"
+                               Grid.Row="0"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="90"
+                               Margin="2"
+                               Content="Secret" />
+                        <TextBox Name="tbSecret"
+                                 Grid.Row="0"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 Width="320"
+                                 IsReadOnly="True" />
+                        <Button Name="btnGenerateSecret"
+                                Grid.Row="0"
+                                Grid.Column="2"
+                                VerticalContentAlignment="Center"
+                                Margin="2"
+                                Content="Generate Secret"
+                                Width="100"
+                                TabIndex="60"
+                                ToolTip="Generate a new secret" />
+                        <Label Name="lblDeviceName"
+                               Grid.Row="1"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="90"
+                               Margin="2"
+                               Content="Device Name" />
+                        <TextBox Name="tbDeviceName"
+                                 Grid.Row="1"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 Width="320"
+                                 TabIndex="70" />
+                        <Button Name="btnAddQR"
+                                Grid.Row="1"
+                                Grid.Column="2"
+                                VerticalContentAlignment="Center"
+                                Margin="2"
+                                Content="Add"
+                                Width="100"
+                                ToolTip="Add the generated secret to the user account" />
+                        <Label Name="lblGateway"
+                               Grid.Row="2"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="90"
+                               Margin="2"
+                               Content="Gateway FQDN" />
+                        <TextBox Name="tbGateway"
+                                 Grid.Row="2"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 Width="320"
+                                 ToolTip="Can be pre-configured by starting the application with the -GatewayUri '&lt;gw.domain.com&gt;' parameter"
+                                 TabIndex="80" />
+                        <Button Name="btnGenerateQR"
+                                Grid.Row="2"
+                                Grid.Column="2"
+                                VerticalContentAlignment="Center"
+                                Margin="2"
+                                Content="Generate QR"
+                                Width="100"
+                                VerticalAlignment="Top"
+                                Height="27"
+                                TabIndex="90"
+                                ToolTip="Generate a QR code" />
+                        <Label Name="lblTokenDisplayText"
+                               Grid.Row="3"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="90"
+                               Margin="2"
+                               Content="Token Text" />
+                        <StackPanel Name="spTokenText"
+                                    Grid.Row="3"
+                                    Grid.Column="1"
+                                    Grid.ColumnSpan="3"
+                                    Margin="2"
+                                    ToolTip="Select a text format for the Authenticator App"
+                                    IsEnabled="true">
+                            <RadioButton Name="rbTokenTextOption1"
+                                         Content='[1] username@domain.corp' />
+                            <RadioButton Name="rbTokenTextOption2"
+                                         Content='[2] username@gateway.domain.com'
+                                         IsChecked="True" />
+                            <RadioButton Name="rbTokenTextOption3"
+                                         Content='[3] username@domain.corp@gateway.domain.com' />
+                        </StackPanel>
+                    </Grid>
+                </GroupBox>
+                <GroupBox Name="gbToken"
+                          Grid.Row="2"
+                          Grid.Column="1"
+                          Header="Token"
+                          Height="Auto"
+                          Margin="2"
+                          Width="Auto"
+                          IsEnabled="False">
+                    <Grid Margin="3">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Name="tbTOTPToken"
+                                 Grid.Row="0"
+                                 Grid.Column="0"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text="------"
+                                 Width="Auto"
+                                 IsReadOnly="True"
+                                 HorizontalContentAlignment="Center"
+                                 FontSize="20"
+                                 FontFamily="Lucida Console"
+                                 ToolTip="Token code will be copied to the clipboard" />
+                        <Button Name="btnViewTOTPToken"
+                                Grid.Row="0"
+                                Grid.Column="1"
+                                VerticalContentAlignment="Center"
+                                Margin="2"
+                                Content="View Token"
+                                Width="100"
+                                Height="27"
+                                ToolTip="Click to generate a token code" />
+                        <ProgressBar Name="pbTOTPToken"
+                                     Grid.Row="1"
+                                     Grid.Column="0"
+                                     Grid.ColumnSpan="2"
+                                     Height="5"
+                                     Margin="2" />
+                    </Grid>
+                </GroupBox>
+                <Image Name="AppImage"
+                       Grid.Column="1"
+                       Grid.Row="3"
+                       HorizontalAlignment="Right"
+                       Height="100"
+                       VerticalAlignment="Bottom"
+                       Width="100" />
+            </Grid>
+        </TabItem>
+        <TabItem Header="Settings">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Row="0"
+                            Grid.Column="2"
+                            Grid.RowSpan="3"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Stretch"
+                            Margin="0,10,0,0">
+                    <Button Name="btnSaveSettings"
+                            VerticalContentAlignment="Center"
+                            Height="27"
+                            Margin="2"
+                            Content="Save"
+                            Width="100"
+                            TabIndex="300"
+                            ToolTip="Search for user"
+                            VerticalAlignment="Top" />
+                    <Button Name="btnTestSettings"
+                            VerticalContentAlignment="Center"
+                            Height="27"
+                            Margin="2"
+                            Content="Test"
+                            Width="100"
+                            TabIndex="300"
+                            ToolTip="Test and validate the settings"
+                            VerticalAlignment="Top" />
+                </StackPanel>
+                <GroupBox Name="gbGeneral"
+                          Grid.Row="0"
+                          Grid.Column="0"
+                          Header="General Settings"
+                          Height="Auto"
+                          Margin="2"
+                          Width="Auto"
+                          IsEnabled="True">
+                    <Grid Margin="3,6,3,3">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Label Name="lblGatewayURI"
+                               Grid.Row="0"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="Auto"
+                               Margin="2"
+                               Content="Gateway URI FQDN" />
+                        <TextBox Name="tbGatewayURI"
+                                 Grid.Row="0"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 Width="320"
+                                 ToolTip="Enter the Gateway URI / Address"
+                                 TabIndex="10" />
+                        <Label Name="lblQRSize"
+                               Grid.Row="1"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="Auto"
+                               Margin="2"
+                               Content="QR Image Size" />
+                        <TextBox Name="tbQRSize"
+                                 Grid.Row="1"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 Width="320"
+                                 ToolTip="Enter the QR Image size (default 300x300)"
+                                 TabIndex="20" />
+                        <Label Name="lblChangeSecretDisabled"
+                               Grid.Row="2"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="Auto"
+                               Margin="2"
+                               Content="Change Scret" />
+                        <CheckBox Name="cbChangeSecretDisabled"
+                                  Grid.Row="2"
+                                  Grid.Column="1"
+                                  VerticalContentAlignment="Center"
+                                  Margin="2"
+                                  Content="Disabled"
+                                  ToolTip="If unchecked you are allowed to edit or change the secret manually. (Default:Checked)"
+                                  TabIndex="100"
+                                  IsChecked="True" />
+                    </Grid>
+                </GroupBox>
+                <GroupBox Name="gbLDAP"
+                          Grid.Row="1"
+                          Grid.Column="0"
+                          Grid.ColumnSpan="2"
+                          Header="LDAP Settings"
+                          Height="Auto"
+                          Margin="2"
+                          Width="Auto"
+                          IsEnabled="True">
+                    <Grid Margin="3,6,3,3">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="100" />
+                        </Grid.ColumnDefinitions>
+                        <Label Name="lblLDAPAlternativeModule"
+                               Grid.Row="0"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="Auto"
+                               Margin="2"
+                               Content="Native AD" />
+                        <CheckBox Name="cbLDAPAlternativeModule"
+                                  Grid.Row="0"
+                                  Grid.Column="1"
+                                  VerticalContentAlignment="Center"
+                                  Margin="2"
+                                  Content="Experimental option!"
+                                  ToolTip="When checked the PowerShell module 'ActiveDirectory' will not be used, but an alternative option (ADSI)."
+                                  TabIndex="100" />
+                        <Label Name="lblLDAPServer"
+                               Grid.Row="1"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="Auto"
+                               Margin="2"
+                               Content="LDAP Server FQDN" />
+                        <TextBox Name="tbLDAPServer"
+                                 Grid.Row="1"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 Width="320"
+                                 ToolTip="Enter the LDAP server fqdn, ip address or domain fqdn. Leave empty for default value."
+                                 TabIndex="110" />
+                        <Label Name="lblLDAPPort"
+                               Grid.Row="2"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="Auto"
+                               Margin="2"
+                               Content="LDAP Server Port" />
+                        <TextBox Name="tbLDAPPort"
+                                 Grid.Row="2"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 Width="320"
+                                 ToolTip="Enter the LDAP server port, 0 for default. E.g. 636"
+                                 TabIndex="120" />
+                        <Label Name="lblLDAPUsername"
+                               Grid.Row="3"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="Auto"
+                               Margin="2"
+                               Content="LDAP Username" />
+                        <TextBox Name="tbLDAPUsername"
+                                 Grid.Row="3"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 Width="320"
+                                 ToolTip="Enter the LDAP username with the required permissions"
+                                 TabIndex="130" />
+                        <Label Name="lblLDAPPassword"
+                               Grid.Row="4"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="Auto"
+                               Margin="2"
+                               Content="LDAP Password" />
+                        <PasswordBox Name="pbLDAPPassword"
+                                     Grid.Row="4"
+                                     Grid.Column="1"
+                                     VerticalContentAlignment="Center"
+                                     Password=""
+                                     Margin="2"
+                                     Width="320"
+                                     ToolTip="Enter the LDAP password for the username"
+                                     TabIndex="140" />
+                        <Label Name="lblLDAPAttribute"
+                               Grid.Row="5"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="Auto"
+                               Margin="2"
+                               Content="User Attribute" />
+                        <TextBox Name="tbLDAPAttribute"
+                                 Grid.Row="5"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 Width="320"
+                                 ToolTip="Enter the LDAP attribute name for storing the OTP seed"
+                                 TabIndex="150" />
+                        <Label Name="lblLDAPSecretEncryptionEnabled"
+                               Grid.Row="6"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Width="Auto"
+                               Margin="2"
+                               Content="Secret Encryption" />
+                        <CheckBox Name="cbLDAPSecretEncryptionEnabled"
+                                  Grid.Row="6"
+                                  Grid.Column="1"
+                                  VerticalContentAlignment="Center"
+                                  Margin="2"
+                                  Content="Enabled"
+                                  ToolTip="Check if you want to use encrypted token secrets"
+                                  TabIndex="160" />
+                        <Label Name="lblSecretEncryptionCertificateThumbprint"
+                               Grid.Row="7"
+                               Grid.Column="0"
+                               HorizontalAlignment="Left"
+                               VerticalContentAlignment="Center"
+                               Margin="2"
+                               Content="Certificate Thumbprint" />
+                        <TextBox Name="tbSecretEncryptionCertificateThumbprint"
+                                 Grid.Row="7"
+                                 Grid.Column="1"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 TabIndex="170"
+                                 ToolTip="Certificate thumbprint to decrypt the secret" />
+                    </Grid>
+                </GroupBox>
+            </Grid>
+        </TabItem>
+        <TabItem Name="tiEncryption"
+                 Header="Encryption"
+                 Visibility="Visible">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <GroupBox Name="gbEncryption"
+                          Grid.Row="2"
+                          Grid.Column="0"
+                          Header="Encryption"
+                          Height="Auto"
+                          Margin="2"
+                          Width="Auto"
+                          IsEnabled="True">
+                    <Grid Margin="3">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="30" />
+                            <RowDefinition Height="30" />
+                            <RowDefinition Height="30" />
+                            <RowDefinition Height="30" />
+                            <RowDefinition Height="30" />
+                            <RowDefinition Height="30" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="320" />
+                            <ColumnDefinition Width="100" />
+                        </Grid.ColumnDefinitions>
+                        <Label Name="lblEncryptionOperation"
+                               Grid.Row="0"
+                               Grid.Column="0"
+                               VerticalContentAlignment="Top"
+                               Margin="2"
+                               Content="Attribute operation"
+                               Grid.ColumnSpan="2" />
+                        <StackPanel Name="spEncryptionOperation"
+                                    Grid.Row="0"
+                                    Grid.Column="2"
+                                    Margin="2">
+                            <RadioButton Name="rbEncryptionOperation0"
+                                         TabIndex="11"
+                                         Content='Convert plaintext OTP secret to encrypted format' />
+                            <RadioButton Name="rbEncryptionOperation1"
+                                         TabIndex="11"
+                                         Content='Convert the encrypted OTP secrets back to plaintext' />
+                            <RadioButton Name="rbEncryptionOperation2"
+                                         TabIndex="11"
+                                         Content='Update the certificate to a new certificate' />
+                        </StackPanel>
+                        <Label Name="lblEncryptionOption"
+                               Grid.Row="1"
+                               Grid.Column="0"
+                               Margin="2"
+                               Content="Attribute option"
+                               Grid.ColumnSpan="2" />
+                        <StackPanel Name="spEncryptionOption"
+                                    Grid.Row="1"
+                                    Grid.Column="2"
+                                    Grid.ColumnSpan="2"
+                                    Margin="2">
+                            <RadioButton Name="rbEncryptionOption0"
+                                         TabIndex="21"
+                                         Content='Save to same attribute' />
+                            <RadioButton Name="rbEncryptionOption1"
+                                         TabIndex="21"
+                                         Content='Save to different attribute' />
+                        </StackPanel>
+                        <Label Name="lblCurrentAttribute"
+                               Grid.Row="2"
+                               Grid.Column="0"
+                               VerticalContentAlignment="Top"
+                               Margin="2"
+                               Content="Current Attribute"
+                               Grid.ColumnSpan="2" />
+                        <TextBox Name="tbCurrentAttribute"
+                                 Grid.Row="2"
+                                 Grid.Column="2"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 TabIndex="31"
+                                 ToolTip="Enter the attribute name where the OTP secret is currently stored" />
+                        <Label Name="lblNewAttribute"
+                               Grid.Row="3"
+                               Grid.Column="0"
+                               VerticalContentAlignment="Top"
+                               Margin="2"
+                               Content="New Attribute"
+                               Grid.ColumnSpan="2" />
+                        <TextBox Name="tbNewAttribute"
+                                 Grid.Row="3"
+                                 Grid.Column="2"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 TabIndex="41"
+                                 ToolTip="Enter the attribute name where the converted OTP secret will be saved to" />
+                        <Label Name="lblCurrentCertificateThumbprint"
+                               Grid.Row="4"
+                               Grid.Column="0"
+                               VerticalContentAlignment="Center"
+                               Margin="2"
+                               Content="Current Certificate"
+                               Grid.ColumnSpan="2" />
+                        <TextBox Name="tbCurrentCertificateThumbprint"
+                                 Grid.Row="4"
+                                 Grid.Column="2"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 TabIndex="51"
+                                 ToolTip="Current certificate thumbprint to decrypt the secret with" />
+                        <Label Name="lblNewCertificateThumbprint"
+                               Grid.Row="5"
+                               Grid.Column="0"
+                               VerticalContentAlignment="Center"
+                               Margin="2"
+                               Content="New Certificate"
+                               Grid.ColumnSpan="2" />
+                        <TextBox Name="tbNewCertificateThumbprint"
+                                 Grid.Row="5"
+                                 Grid.Column="2"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 TabIndex="61"
+                                 ToolTip="New certificate thumbprint to encrypt the secret with" />
+                        <Label Name="lblLogPath"
+                               Grid.Row="6"
+                               Grid.Column="0"
+                               VerticalContentAlignment="Center"
+                               Margin="2"
+                               Content="Log File"
+                               Grid.ColumnSpan="2" />
+                        <TextBox Name="tbLogPathPath"
+                                 Grid.Row="6"
+                                 Grid.Column="2"
+                                 VerticalContentAlignment="Center"
+                                 Margin="2"
+                                 Text=""
+                                 IsReadOnly="True"
+                                 TabIndex="71"
+                                 ToolTip="Logfile for the actions" />
+                        <Button Name="btnLogPathPath"
+                                Grid.Row="6"
+                                Grid.Column="3"
+                                VerticalContentAlignment="Center"
+                                Margin="2"
+                                Content="Browse"
+                                TabIndex="72"
+                                ToolTip="Select a logfile location" />
+                        <Label Name="lblConversionStatus"
+                               Grid.Row="7"
+                               Grid.Column="0"
+                               VerticalContentAlignment="Center"
+                               Margin="2"
+                               Content="Progress"
+                               Grid.ColumnSpan="2" />
+                        <Grid Grid.Row="7"
+                              Grid.Column="2"
+                              Margin="2"
+                              ToolTip="Conversion progress">
+                            <ProgressBar Name="pbConversionStatus"
+                                         Minimum="0"
+                                         Maximum="100"
+                                         Height="15"
+                                         Value="0" />
+                            <TextBlock Name="tbConversionStatus"
+                                       Text="0% | Success:0 | Failed:0"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
                         </Grid>
-                    </GroupBox>
-                    <GroupBox Grid.Row="0" Grid.Column="1" Grid.RowSpan="2" Header="QR" Height="Auto" Margin="2" Width="Auto">
-                        <Grid Margin="3">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <Label Name="lbTokenUserText" Grid.Row="0" Grid.Column="0" Margin="2" Content="" VerticalAlignment="Center" HorizontalContentAlignment="left" VerticalContentAlignment="Center" Width="200" Visibility="Visible" FontWeight="Bold" FontSize="8" />
-                            <Image Name="ImgQR" Grid.Row="1" Grid.Column="0" Margin="2" Height="200" Width="200" Visibility="Visible" Stretch="UniformToFill" RenderTransformOrigin="0.5,0.5" />
-                            <Label Name="lblQR" Grid.Row="2" Grid.Column="0" Margin="2" Content="" VerticalAlignment="Bottom" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Visibility="Visible" FontWeight="Bold" FontSize="14"/>
-                            <Button Name="btnExportQR" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="Export QR" Width="100" VerticalAlignment="Bottom" Height="27" TabIndex="100" ToolTip="Export and save the QR code" />
-                        </Grid>
-                    </GroupBox>
-                    <GroupBox Grid.Row="2" Grid.Column="0" Grid.RowSpan="2" Header="OTP Secret" Height="Auto" Margin="2" Width="Auto">
-                        <Grid Margin="3">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="135"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <Label Name="lblSecret" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Secret" />
-                            <TextBox Name="tbSecret" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" IsReadOnly="True" />
-                            <Button Name="btnGenerateSecret" Grid.Row="0" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Generate Secret" Width="100" TabIndex="60" ToolTip="Generate a new secret" />
-                            <Label Name="lblDeviceName" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Device Name" />
-                            <TextBox Name="tbDeviceName" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" TabIndex="70" />
-                            <Button Name="btnAddQR" Grid.Row="1" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Add" Width="100" ToolTip="Add the generated secret to the user account" />
-                            <Label Name="lblGateway" Grid.Row="2" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Gateway FQDN" />
-                            <TextBox Name="tbGateway" Grid.Row="2" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Can be pre-configured by starting the application with the -GatewayUri '&lt;gw.domain.com&gt;' parameter" TabIndex="80" />
-                            <Button Name="btnGenerateQR" Grid.Row="2" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Content="Generate QR" Width="100" VerticalAlignment="Top" Height="27" TabIndex="90" ToolTip="Generate a QR code" />
-                            <Label Name="lblTokenDisplayText" Grid.Row="3" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="90" Margin="2" Content="Token Text" />
-                            <StackPanel Name="spTokenText" Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="3" Margin="2" ToolTip="Select a text format for the Authenticator App" IsEnabled="true">
-                                <RadioButton Name="rbTokenTextOption1" Content = '[1] username@domain.corp'/>
-                                <RadioButton Name="rbTokenTextOption2" Content = '[2] username@gateway.domain.com' IsChecked="True"/>
-                                <RadioButton Name="rbTokenTextOption3" Content = '[3] username@domain.corp@gateway.domain.com'/>
-                            </StackPanel>
-                        </Grid>
-                    </GroupBox>
-                    <GroupBox Name="gbToken" Grid.Row="2" Grid.Column="1" Header="Token" Height="Auto" Margin="2" Width="Auto" IsEnabled="False">
-                        <Grid Margin="3">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition />
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBox Name="tbTOTPToken" Grid.Row="0" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Text="------" Width="Auto" IsReadOnly="True" HorizontalContentAlignment="Center" FontSize="20" FontFamily="Lucida Console" ToolTip="Token code will be copied to the clipboard" />
-                            <Button Name="btnViewTOTPToken" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Content="View Token" Width="100" Height="27" ToolTip="Click to generate a token code" />
-                            <ProgressBar Name="pbTOTPToken" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Height="5" Margin="2"/>
-                        </Grid>
-                    </GroupBox>
-                    <Image Name="AppImage"  Grid.Column="1"  Grid.Row="3" HorizontalAlignment="Right" Height="100" VerticalAlignment="Bottom" Width="100"/>
-                </Grid>
-            </TabItem>
-            <TabItem Header="Settings">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Row="0" Grid.Column="2" Grid.RowSpan="3" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="0,10,0,0">
-                        <Button Name="btnSaveSettings" VerticalContentAlignment="Center" Height="27" Margin="2" Content="Save" Width="100" TabIndex="300" ToolTip="Search for user" VerticalAlignment="Top"/>
-                        <Button Name="btnTestSettings" VerticalContentAlignment="Center" Height="27" Margin="2" Content="Test" Width="100" TabIndex="300" ToolTip="Test and validate the settings" VerticalAlignment="Top"/>
-                    </StackPanel>
-
-                    <GroupBox Name="gbGeneral" Grid.Row="0" Grid.Column="0" Header="General Settings" Height="Auto" Margin="2" Width="Auto" IsEnabled="True">
-                        <Grid Margin="3,6,3,3">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="135"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <Label Name="lblGatewayURI" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="Gateway URI FQDN" />
-                            <TextBox Name="tbGatewayURI" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the Gateway URI / Address" TabIndex="10" />
-                            <Label Name="lblQRSize" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="QR Image Size" />
-                            <TextBox Name="tbQRSize" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the QR Image size (default 300x300)" TabIndex="20" />
-                        </Grid>
-                    </GroupBox>
-                    <GroupBox Name="gbLDAP" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Header="LDAP Settings" Height="Auto" Margin="2" Width="Auto" IsEnabled="True" >
-                        <Grid Margin="3,6,3,3">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="135"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="100"/>
-                            </Grid.ColumnDefinitions>
-                            <Label Name="lblLDAPAlternativeModule" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="Native AD" />
-                            <CheckBox Name="cbLDAPAlternativeModule" Grid.Row="0" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Content="Experimental option!" ToolTip="When checked the PowerShell module 'ActiveDirectory' will not be used, but an alternative option (ADSI)." TabIndex="100"/>
-                            <Label Name="lblLDAPServer" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="LDAP Server FQDN" />
-                            <TextBox Name="tbLDAPServer" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP server fqdn, ip address or domain fqdn. Leave empty for default value." TabIndex="110" />
-                            <Label Name="lblLDAPPort" Grid.Row="2" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="LDAP Server Port" />
-                            <TextBox Name="tbLDAPPort" Grid.Row="2" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP server port, 0 for default. E.g. 636" TabIndex="120" />
-                            <Label Name="lblLDAPUsername" Grid.Row="3" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="LDAP Username" />
-                            <TextBox Name="tbLDAPUsername" Grid.Row="3" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP username with the required permissions" TabIndex="130" />
-                            <Label Name="lblLDAPPassword" Grid.Row="4" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="LDAP Password" />
-                            <PasswordBox Name="pbLDAPPassword" Grid.Row="4" Grid.Column="1" VerticalContentAlignment="Center" Password="" Margin="2" Width="320" ToolTip="Enter the LDAP password for the username" TabIndex="140" />
-                            <Label Name="lblLDAPAttribute" Grid.Row="5" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="User Attribute" />
-                            <TextBox Name="tbLDAPAttribute" Grid.Row="5" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" Width="320" ToolTip="Enter the LDAP attribute name for storing the OTP seed" TabIndex="150" />
-                            <Label Name="lblLDAPSecretEncryptionEnabled" Grid.Row="6" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Width="Auto" Margin="2" Content="Secret Encryption" />
-                            <CheckBox Name="cbLDAPSecretEncryptionEnabled" Grid.Row="6" Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Content="Enabled" ToolTip="Check if you want to use encrypted token secrets" TabIndex="160"/>
-                            <Label Name="lblSecretEncryptionCertificateThumbprint" Grid.Row="7" Grid.Column="0" HorizontalAlignment="Left" VerticalContentAlignment="Center" Margin="2" Content="Certificate Thumbprint" />
-                            <TextBox Name="tbSecretEncryptionCertificateThumbprint" Grid.Row="7"  Grid.Column="1" VerticalContentAlignment="Center" Margin="2" Text="" TabIndex="170" ToolTip="Certificate thumbprint to decrypt the secret" />
-                        </Grid>
-                    </GroupBox>
-                </Grid>
-            </TabItem>
-            <TabItem Name ="tiEncryption" Header="Encryption" Visibility="Visible">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <GroupBox Name="gbEncryption" Grid.Row="2" Grid.Column="0" Header="Encryption" Height="Auto" Margin="2" Width="Auto" IsEnabled="True">
-                        <Grid Margin="3">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="30"/>
-                                <RowDefinition Height="30"/>
-                                <RowDefinition Height="30"/>
-                                <RowDefinition Height="30"/>
-                                <RowDefinition Height="30"/>
-                                <RowDefinition Height="30"/>
-                            </Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="320"/>
-                                <ColumnDefinition Width="100"/>
-                            </Grid.ColumnDefinitions>
-                            <Label Name="lblEncryptionOperation" Grid.Row="0" Grid.Column="0" VerticalContentAlignment="Top" Margin="2" Content="Attribute operation" Grid.ColumnSpan="2"/>
-                            <StackPanel Name="spEncryptionOperation" Grid.Row="0" Grid.Column="2" Margin="2" >
-                                <RadioButton Name="rbEncryptionOperation0" TabIndex="11" Content = 'Convert plaintext OTP secret to encrypted format'/>
-                                <RadioButton Name="rbEncryptionOperation1" TabIndex="11" Content = 'Convert the encrypted OTP secrets back to plaintext'/>
-                                <RadioButton Name="rbEncryptionOperation2" TabIndex="11" Content = 'Update the certificate to a new certificate'/>
-                            </StackPanel>
-                            <Label Name="lblEncryptionOption" Grid.Row="1" Grid.Column="0" Margin="2" Content="Attribute option" Grid.ColumnSpan="2"/>
-                            <StackPanel Name="spEncryptionOption" Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Margin="2">
-                                <RadioButton Name="rbEncryptionOption0" TabIndex="21" Content = 'Save to same attribute'/>
-                                <RadioButton Name="rbEncryptionOption1" TabIndex="21" Content = 'Save to different attribute'/>
-                            </StackPanel>
-                            <Label Name="lblCurrentAttribute" Grid.Row="2" Grid.Column="0" VerticalContentAlignment="Top" Margin="2" Content="Current Attribute" Grid.ColumnSpan="2"/>
-                            <TextBox Name="tbCurrentAttribute" Grid.Row="2" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Text="" TabIndex="31" ToolTip="Enter the attribute name where the OTP secret is currently stored"  />
-                            <Label Name="lblNewAttribute" Grid.Row="3" Grid.Column="0" VerticalContentAlignment="Top" Margin="2" Content="New Attribute" Grid.ColumnSpan="2"/>
-                            <TextBox Name="tbNewAttribute" Grid.Row="3" Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Text="" TabIndex="41" ToolTip="Enter the attribute name where the converted OTP secret will be saved to" />
-                            <Label Name="lblCurrentCertificateThumbprint" Grid.Row="4" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="Current Certificate" Grid.ColumnSpan="2" />
-                            <TextBox Name="tbCurrentCertificateThumbprint" Grid.Row="4"  Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Text="" TabIndex="51" ToolTip="Current certificate thumbprint to decrypt the secret with" />
-                            <Label Name="lblNewCertificateThumbprint" Grid.Row="5" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="New Certificate" Grid.ColumnSpan="2" />
-                            <TextBox Name="tbNewCertificateThumbprint" Grid.Row="5"  Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Text="" TabIndex="61" ToolTip="New certificate thumbprint to encrypt the secret with" />
-                            <Label Name="lblLogPath" Grid.Row="6" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="Log File" Grid.ColumnSpan="2" />
-                            <TextBox Name="tbLogPathPath" Grid.Row="6"  Grid.Column="2" VerticalContentAlignment="Center" Margin="2" Text="" IsReadOnly="True" TabIndex="71" ToolTip="Logfile for the actions" />
-                            <Button Name="btnLogPathPath" Grid.Row="6"  Grid.Column="3" VerticalContentAlignment="Center" Margin="2" Content="Browse" TabIndex="72" ToolTip="Select a logfile location" />
-                            <Label Name="lblConversionStatus" Grid.Row="7" Grid.Column="0" VerticalContentAlignment="Center" Margin="2" Content="Progress" Grid.ColumnSpan="2" />
-                            <Grid Grid.Row="7"  Grid.Column="2" Margin="2" ToolTip="Conversion progress" >
-                                <ProgressBar Name="pbConversionStatus" Minimum="0" Maximum="100" Height="15" Value="0" />
-                                <TextBlock Name="tbConversionStatus" Text="0% | Success:0 | Failed:0" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Grid>
-                            <Button Name="btnConversionStart" Grid.Row="7"  Grid.Column="3" VerticalContentAlignment="Center" Margin="2" Content="Convert" TabIndex="81" ToolTip="Start the conversion"/>
-                        </Grid>
-                    </GroupBox>
-                </Grid>
-            </TabItem>
-        </TabControl>
-    </Grid>
+                        <Button Name="btnConversionStart"
+                                Grid.Row="7"
+                                Grid.Column="3"
+                                VerticalContentAlignment="Center"
+                                Margin="2"
+                                Content="Convert"
+                                TabIndex="81"
+                                ToolTip="Start the conversion" />
+                    </Grid>
+                </GroupBox>
+            </Grid>
+        </TabItem>
+    </TabControl>
+</Grid>
 </Window>
 "@
     $AppImageB64 = @"
@@ -3294,6 +4027,10 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                 $this.SelectionStart = $cursorPos
             }
             $this.SelectionLength = 0
+            if ($this.Text -ne $SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+
         }
     )
 
@@ -3356,9 +4093,9 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             Update-Gui
             if ($SyncedVariables.DeviceSecrets.Count -ge 4) {
                 $null = [System.Windows.MessageBox]::Show("The maximum of allowed devices reached.`nTo continue remove one device!", "Maximum Reached!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
-            } elseif ($SyncedVariables.DeviceSecrets | Where-Object DeviceName -eq $($SyncHash.WPFControl_tbDeviceName.Text)) {
+            } elseif ($SyncedVariables.DeviceSecrets | Where-Object DeviceName -EQ $($SyncHash.WPFControl_tbDeviceName.Text)) {
                 $null = [System.Windows.MessageBox]::Show("The Device Name `"$($SyncHash.WPFControl_tbDeviceName.Text)`" already exists", "Double Entry!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
-            } elseif ($SyncedVariables.DeviceSecrets | Where-Object Secret -eq $($SyncedVariables.B32Secret)) {
+            } elseif ($SyncedVariables.DeviceSecrets | Where-Object Secret -EQ $($SyncedVariables.B32Secret)) {
                 $null = [System.Windows.MessageBox]::Show("The Secret already exists!`nGenerate a new secret", "Double Entry!", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
             } else {
                 if (-Not $SyncHash.WPFControl_btnSaveOtp.IsEnabled) { $SyncHash.WPFControl_btnSaveOtp.IsEnabled = $true }
@@ -3432,6 +4169,9 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     $SyncHash.WPFControl_tbSecret.add_TextChanged( 
         { 
             Write-Verbose "tbSecret Text Changed"
+            if (-Not $SyncedVariables.Settings.ChangeSecretDisabled) {
+                $SyncedVariables.B32Secret = $this.Text
+            }
             Update-Gui
             Invoke-ValidateAddSecret
             Invoke-ValidateGUIQR
@@ -3591,6 +4331,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                 Import-GUISettings -Path $SyncedVariables.SettingsFilename
                 Import-ModulesGUI
                 Reset-GUIForm
+                $SyncedVariables.SettingsChanged = $false
             } catch {
                 Write-Verbose "$($_.Exception.Message)"
             }
@@ -3657,48 +4398,6 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         }
     )
 
-    
-
-    $SyncHash.WPFControl_tbQRSize.Add_TextChanged(
-        {
-            # tbQRSize Text Changed Event
-            # Only allow numbers
-            if ($this.Text -match '[^0-9]') {
-                #Replace everything not in range 0-9
-                $cursorPos = $this.SelectionStart
-                $this.Text = $this.Text -replace '[^0-9]', $null
-                # move the cursor to the end of the text:
-                # $this.SelectionStart = $this.Text.Length
-        
-                # or leave the cursor where it was before the replace
-                $this.SelectionStart = $cursorPos - 1
-                $this.SelectionLength = 0
-            }
-        }
-    )
-
-    $SyncHash.WPFControl_tbLDAPPort.Add_TextChanged(
-        {
-            # tbLDAPPort Text Changed Event
-            # Only allow numbers
-            if ($this.Text -match '[^0-9]') {
-                #Replace everything not in range 0-9
-                $cursorPos = $this.SelectionStart
-                $this.Text = $this.Text -replace '[^0-9]', $null
-                # move the cursor to the end of the text:
-                # $this.SelectionStart = $this.Text.Length
-        
-                # or leave the cursor where it was before the replace
-                $this.SelectionStart = $cursorPos - 1
-                $this.SelectionLength = 0
-            } elseif ([Int]$this.Text -gt 65535) {
-                $this.Text = "65535"
-                $this.SelectionStart = 5
-                $this.SelectionLength = 0
-            }
-        }
-    )
-
     #TokenText Handler
     [System.Windows.RoutedEventHandler]$Script:TokenTextSelectedEventHandler = {
         Write-Verbose "TokenText Selected Event"
@@ -3726,6 +4425,70 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         [System.Windows.Controls.CheckBox]::UnCheckedEvent, $Script:EncryptionEnabledCheckedEventHandler
     )
 
+    <#
+    $SyncHash.WPFControl_cbChangeSecretDisabled.AddHandler(
+        [System.Windows.Controls.CheckBox]::CheckedEvent, $Script:EncryptionEnabledCheckedEventHandler
+    )
+    $SyncHash.WPFControl_cbChangeSecretDisabled.AddHandler(
+        [System.Windows.Controls.CheckBox]::UnCheckedEvent, $Script:EncryptionEnabledCheckedEventHandler
+    )
+
+    $SyncHash.WPFControl_cbLDAPAlternativeModule.AddHandler(
+        [System.Windows.Controls.CheckBox]::CheckedEvent, $Script:EncryptionEnabledCheckedEventHandler
+    )
+    $SyncHash.WPFControl_cbLDAPAlternativeModule.AddHandler(
+        [System.Windows.Controls.CheckBox]::UnCheckedEvent, $Script:EncryptionEnabledCheckedEventHandler
+    )
+    #>
+    
+    $SyncHash.WPFControl_cbChangeSecretDisabled.Add_Checked(
+        {
+            if ($this.IsChecked -ne $SyncedVariables.Settings.ChangeSecretDisabled) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
+    )
+
+    $SyncHash.WPFControl_cbChangeSecretDisabled.Add_Unchecked(
+        { 
+            if ($this.IsChecked -ne $SyncedVariables.Settings.ChangeSecretDisabled) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
+    )
+
+    $SyncHash.WPFControl_cbLDAPAlternativeModule.Add_Checked(
+        { 
+            if ($this.IsChecked -ne $SyncedVariables.Settings.LDAPNativeFunctions) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
+    )
+
+    $SyncHash.WPFControl_cbLDAPAlternativeModule.Add_Unchecked(
+        { 
+            if ($this.IsChecked -ne $SyncedVariables.Settings.LDAPNativeFunctions) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
+    )
+
+    $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.Add_Checked(
+        { 
+            if ($this.IsChecked -ne $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
+    )
+
+    $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.Add_Unchecked(
+        { 
+            if ($this.IsChecked -ne $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
+    )
+
     #EncryptionOperation Handler
     [System.Windows.RoutedEventHandler]$Script:EncryptionOperationSelectedEventHandler = {
         Write-Verbose "EncryptionOperation Selected Event"
@@ -3747,6 +4510,93 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     }
     $SyncHash.WPFControl_spEncryptionOption.AddHandler(
         [System.Windows.Controls.RadioButton]::CheckedEvent, $Script:EncryptionOptionSelectedEventHandler
+    )
+
+    $SyncHash.WPFControl_tbQRSize.Add_TextChanged(
+        {
+            # tbQRSize Text Changed Event
+            # Only allow numbers
+            if ($this.Text -match '[^0-9]') {
+                #Replace everything not in range 0-9
+                $cursorPos = $this.SelectionStart
+                $this.Text = $this.Text -replace '[^0-9]', $null
+                # move the cursor to the end of the text:
+                # $this.SelectionStart = $this.Text.Length
+    
+                # or leave the cursor where it was before the replace
+                $this.SelectionStart = $cursorPos - 1
+                $this.SelectionLength = 0
+            }
+            if ($this.Text -ne $SyncedVariables.Settings.QRSize) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
+    )
+
+    $SyncHash.WPFControl_tbLDAPPort.Add_TextChanged(
+        {
+            # tbLDAPPort Text Changed Event
+            # Only allow numbers
+            if ($this.Text -match '[^0-9]') {
+                #Replace everything not in range 0-9
+                $cursorPos = $this.SelectionStart
+                $this.Text = $this.Text -replace '[^0-9]', $null
+                # move the cursor to the end of the text:
+                # $this.SelectionStart = $this.Text.Length
+    
+                # or leave the cursor where it was before the replace
+                $this.SelectionStart = $cursorPos - 1
+                $this.SelectionLength = 0
+            } elseif ([Int]$this.Text -gt 65535) {
+                $this.Text = "65535"
+                $this.SelectionStart = 5
+                $this.SelectionLength = 0
+            }
+            if ($this.Text -ne $SyncedVariables.Settings.LDAPSettings.LDAPServer) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+
+        }
+    )
+
+    $SyncHash.WPFControl_tbGatewayURI.Add_TextChanged(
+        {
+            if ($this.Text -ne $SyncedVariables.Settings.GatewayURI) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
+    )
+    
+    $SyncHash.WPFControl_tbLDAPServer.Add_TextChanged(
+        {
+            if ($this.Text -ne $SyncedVariables.Settings.LDAPSettings.LDAPServer) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
+    )
+
+    $SyncHash.WPFControl_tbLDAPUsername.Add_TextChanged(
+        {
+            if ($this.Text -ne $SyncedVariables.Settings.LDAPSettings.LDAPUsername) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
+    )
+    $SyncHash.WPFControl_pbLDAPPassword.Add_PasswordChanged(
+        {
+            
+            if ($this.Password -ne (ConvertTo-PlainText -SecureString $SyncedVariables.Settings.LDAPSettings.LDAPPassword)) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
+    )
+
+    $SyncHash.WPFControl_tbLDAPAttribute.Add_TextChanged(
+        {
+            if ($this.Text -ne $SyncedVariables.Settings.LDAPSettings.LDAPAttribute) {
+                if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
+            }
+        }
     )
 
     $SyncHash.WPFControl_tbCurrentCertificateThumbprint.Add_TextChanged(
@@ -3789,6 +4639,21 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         }
     )
 
+    $SyncHash.WPFControl_tcOTP4ADC.Add_SelectionChanged(
+        {
+            param(
+                [Parameter(Mandatory)][Object]$sender,
+                [Parameter(Mandatory)][System.Windows.Controls.SelectionChangedEventArgs]$e
+            )
+            if ($SyncedVariables.SettingsChanged -and ($sender.SelectedItem.Header -ne "Settings")) {
+                $continueWithoutSaving = Invoke-SettingsChangedQuestion
+                if (-Not $continueWithoutSaving) {
+                    $SyncHash.WPFControl_tcOTP4ADC.SelectedIndex = 1
+                }
+            }
+        }
+    )
+
     #endregion Event handlers
 
     #Set Title
@@ -3796,13 +4661,14 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     # Show/Run the App
     $SyncHash.App.Run($SyncHash.Form) | Out-Null
 }
-End-GUIApplication
+Stop-GUIApplication
 Write-Verbose "Bye, thank you for using OTP4ADC"
+
 # SIG # Begin signature block
 # MIIkrQYJKoZIhvcNAQcCoIIknjCCJJoCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBXpwp4WPSG/FR3
-# ezYj3BuFPrMmWKfrCYxBry0iXUm6v6CCHnAwggTzMIID26ADAgECAhAsJ03zZBC0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBZIRkTqh+96WMO
+# NDqcpPduVv92Ad3Pmqd40gA00TGFwKCCHnAwggTzMIID26ADAgECAhAsJ03zZBC0
 # i/247uUvWN5TMA0GCSqGSIb3DQEBCwUAMHwxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # ExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoT
 # D1NlY3RpZ28gTGltaXRlZDEkMCIGA1UEAxMbU2VjdGlnbyBSU0EgQ29kZSBTaWdu
@@ -3970,29 +4836,29 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # MSQwIgYDVQQDExtTZWN0aWdvIFJTQSBDb2RlIFNpZ25pbmcgQ0ECECwnTfNkELSL
 # /bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAA
 # oQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4w
-# DAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgoN0OOlC0WveXnIm56Z/a/SN3
-# Dqx63ZskDhfACwCh82kwDQYJKoZIhvcNAQEBBQAEggEAS7lbDA8rLd2O/Nqh3Scw
-# 9ROZSpkrRY1ApKvUpmgcwqe/JnMv6lZTxHZUdEZDJycWF3cRkLRPs3dqLMzTmmOx
-# fcEWcqyeFwEMjkTs98fcmjkQJSyzVTqpMha4dA4Kw3nDwLVM7Cd9hWvfxXf48/6P
-# 8YyTJI5C2JaNFqfJ9/XjPIbvJbR7bB/h6vx1gPktSlLyvFEAW8PqnUPWC99y6p6Q
-# SlZB8UnfpUbvYAAOcx6NvcsRUqUqHemZ3aWl9RPEuWW1c7Fa4IJ2Igq/a0lWAPwC
-# F4DwtKUPiV9q5fgZGYlM2TuVyrCXmLTEgGUdTryAmPL/oSjN2D3HFER00pCLRjNL
-# e6GCA0wwggNIBgkqhkiG9w0BCQYxggM5MIIDNQIBATCBkjB9MQswCQYDVQQGEwJH
+# DAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgM/GiLzAVE0gcOcMJRhvwU1Ir
+# f9mbW/8INv5tUNHdUecwDQYJKoZIhvcNAQEBBQAEggEADKcTfx99Xp/SQoIBPdxz
+# QrxRdMu2rl9KA7uNr0440RH1Pe36EUFnb2gunXcR9ItNyZFPESEWdJHhUfcwQROC
+# ZvbnYOvEUEUWQ1n+o+/tS//dVmBID9AngFurNaVzHKS6vqEvMj9Gq5x5v6HzPPnl
+# Ww3WgtMjVrwV/IqXWtBjMos8qJUxq37FcQhgsz3qTAEw2R/lk6mmTpW/cJUpb/CE
+# U16xdURraGRkcc2KwW2S0hG/8/A6Cw3T8iuClNpBUzVC2HQGO3gkzUfyFqVIrZVr
+# cNKN69moAntB12uQLxVfZ1SvNzVr20GLEhKxOH/riBcLn6+5a4v7eMd2QjG0m7nT
+# uKGCA0wwggNIBgkqhkiG9w0BCQYxggM5MIIDNQIBATCBkjB9MQswCQYDVQQGEwJH
 # QjEbMBkGA1UECBMSR3JlYXRlciBNYW5jaGVzdGVyMRAwDgYDVQQHEwdTYWxmb3Jk
 # MRgwFgYDVQQKEw9TZWN0aWdvIExpbWl0ZWQxJTAjBgNVBAMTHFNlY3RpZ28gUlNB
 # IFRpbWUgU3RhbXBpbmcgQ0ECEQCMd6AAj/TRsMY9nzpIg41rMA0GCWCGSAFlAwQC
 # AgUAoHkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcN
-# MjEwNTA2MDUwMzU1WjA/BgkqhkiG9w0BCQQxMgQwyXZlwj4pultGJWZ40L14AOgA
-# vVJu3hGis62GYwJhoV+M0xZG4/VoDLDDQGw2e/AGMA0GCSqGSIb3DQEBAQUABIIC
-# AC03KVBTwZYeGh6TWtCFsT6T4lCxqVBC+/nN2Zg1tw3xKVCqn15VLlMD6TXQdi//
-# U/Ym0V0PF8yuKL4SK8o2FmQE31ZvIBpDv7Wm+YAb1GY0Hmr6eWABiWrjGUXa2rCD
-# Xq9c4RWjC96nQHAG9LF/T8dZuEOejS8yrSu7GPL9hF+7S3B888Xf80Qn2OmJAQh2
-# /p29HZYzlZgBAwpcggojBRrV/ZU6j+CI+ozbAQFM0996thdLXHHxdUVhZBsRVZMC
-# o3XMrgTLKqz4sFOQ6Kz7gxtKaid66uUV9S9UDsDSUFs13gy3xvrmJ9uYdMNkDxEN
-# jPedn8a5PmpqUtVdlTp65Hc44B7JRO5vPH6wlpNlVfONBz3VWYsEPFBDVPwIm/PK
-# 2S0TxdP8V2Wyq2yrR7TddUn5tZmVVssxD8ySFkRouiddC06r50wWgrtbw0pJ0P8O
-# vHtSNtAN/7xcncleVnGXnYRnjJpmwfv02CBtuo0sj9H/s6zMbIcjbodWDdEA1ZRZ
-# XAkdArT3qtoh2+VDqLH2SIF2d39L4oIe4F2ppxLHeYtL330ViaGfYsetp1p0KEdY
-# QW+10pjtwmzmieCbMi3aasMSaj4HVXvIzEHD/7q83DC6AHbxQeouV3BziTsZzewo
-# bgc9bkQ73ee0Akxp6Wnoj7h+QfFToS7iSkhJ/4GUgQwU
+# MjExMjIzMTYyOTI5WjA/BgkqhkiG9w0BCQQxMgQwm6rVLzWwAobwVT/LiFsbrRgj
+# d+3KNEOCgG2iWUuMws8zL3gfzZ3UhssGiEKvtY4WMA0GCSqGSIb3DQEBAQUABIIC
+# ABvjEYhEtHsCIH9rJJ4B+tw8KU8G4tuYSpFlgYFdhqoMQMq97ng2loFJ2MNxFdi1
+# K8yF7gRNHtPBb2KxSl8qw8Xfz9ctYsK/FezJ4KbXhS6O3UFo+A3+48Gzo6jnKMso
+# OMMxat2yw86SoJqkAjiLIX5pr9y8IVhCp7wi9N4Ht4jZZ+gj+SUa6tAw6mjJUYWE
+# I1amkiSpHFbGuGSNTREBuP6EoeqycRjpBKAg1m2FvmR5NxuStQuAuy4raAXLws0A
+# 3JDcn2RhxGmKfRsSSoBu/SI5RODnbu9G7QfgBnPkh6KLZ3EAxhhK8+24ymHqh6gD
+# U8wrwRIgKprNoqDmhZqj9xuAXULu2cEHMB3tmnLi1XhOZa8pnjwvAJZWH4ttbiw4
+# TCYHVbCMi8NEHqmWL1jYB8DTn5mzDMXG3AOBTnLmVCxGqbX3cc4xd0Dni2oV+t3l
+# ViCdriQcj+f8iPPNc67dBlGr5lb8atJGFpoCMIo2jsfsrUUJNmogdZFR2rN6AKYy
+# YFnc4xNjyZnht0E74uHlKquGpvZEKSgC/4JwL3muwxVNmVK13mbXBVL77rHd0Cv5
+# ga+73gDURxQ/3QQ2TrlSBzsnSv7kcnqJ4VzOtswbZIH09UAysXbclzLPQPed3hoe
+# TuZKaZFHb9il1ARzCwEY6ae7zivPbp+IqO1iL4kPnpJC
 # SIG # End signature block
