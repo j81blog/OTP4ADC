@@ -42,7 +42,7 @@
 
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v1.0.5
+    Version   : v1.0.6
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -133,7 +133,7 @@ Param(
     [String]$Delimiter = ","
 )
 
-$AppVersion = "v1.0.5"
+$AppVersion = "v1.0.6"
 
 #region functions
 
@@ -4491,11 +4491,11 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
     
     $SyncHash.WPFControl_btnTestSettings.Add_Click({
             # btnTestSettings Click Action
-            Write-Verbose "btnTestSettings Click"
             param(
                 [Parameter(Mandatory)][Object]$sender,
                 [Parameter(Mandatory)][Windows.RoutedEventArgs]$e
             )
+            Write-Verbose "btnTestSettings Click"
             $SyncHash.WPFControl_btnTestSettings.IsEnabled = $false
             $SyncHash.WPFControl_btnTestSettings.Content = "Checking..."
             Update-Gui
@@ -4876,8 +4876,8 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # SIG # Begin signature block
 # MIITYgYJKoZIhvcNAQcCoIITUzCCE08CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBs+If4ClldxcBE
-# 1G6CnqWRjwKdGZP66cpWALlxpFsKEKCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDhc0lp0RVCIWmT
+# Ke5NsLHTsUCwyWkNHxmXLgJa/z2SWqCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
 # i/247uUvWN5TMA0GCSqGSIb3DQEBCwUAMHwxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # ExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoT
 # D1NlY3RpZ28gTGltaXRlZDEkMCIGA1UEAxMbU2VjdGlnbyBSU0EgQ29kZSBTaWdu
@@ -4971,11 +4971,11 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # IFNpZ25pbmcgQ0ECECwnTfNkELSL/bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQw
 # GAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGC
 # NwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQx
-# IgQga1OoUlCf+CKHV3FrFtaF4db/xKC09YKfFjE4h3yxGOEwDQYJKoZIhvcNAQEB
-# BQAEggEAZ3ysr5VAkTkPh1XGGL+ewnVT/KGTvz+fKFDvcXJ7DwaZzmhk6UUlOGmT
-# XXTRpDwuCBF0B+grk+YOrwewPc/3Eq4EP48L+AvvT2K25TwfCyEcbw0QET7fiZlu
-# fgFMOKMosmKRuO6ZObUikCylFGPcX0YQJMsmw5iovz54hnCCJ6LvzApCLinxkcCS
-# sbJZrPkD2wNU3UfLBact7krqpOHJqU+SG/eCAN3Esx5Y5Lq9tBc7Vdo8L6w3s0MX
-# caXDTMNOpRNRrhIlF35C7v7093/HdRP+ddfIqfSH+e1z87HGkeHsrOLs5xpRC1Ws
-# BBZwSfaZ8DN+QxJ4M4pMqLRxvCdRUA==
+# IgQgeZyvz2owFnfyyAOBHEllTFmLu6b15Q3f/22A0WToBa4wDQYJKoZIhvcNAQEB
+# BQAEggEAc5pb8Fg4aSk7d3LESuwG5afz4TsSUs5E2Vn3ezc9ESWhz3Z4g11m+oId
+# tv/yXprvfVGT9whoJgdw0pY9V6xttlCVZp+qr98g27ie2GgKjPfNhrXYDJGm0sv1
+# ouCIuiHjkB3NL0xNaEozCgSrYEdIKYqKA22m1ZzsuxkJ8raomVlAkcPI2WSdmIEx
+# G1QI4jgQp6aTgBw0vxryJfQOk2vo0N8Ybabvb3qD+Rthn/smKIm+HSf2+dYxbdcy
+# DFuFdDzEpQpLdJBsVG8FtB1L5kmt2vcWnBg55g/qYxB9OrXBnYKYecUbL0+e7wb1
+# kxmzTaqZyNBU1GBgEYCmMeLcihe1wg==
 # SIG # End signature block
