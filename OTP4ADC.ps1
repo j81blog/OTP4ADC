@@ -42,7 +42,7 @@
 
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v1.0.6
+    Version   : v1.0.7
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -133,7 +133,7 @@ Param(
     [String]$Delimiter = ","
 )
 
-$AppVersion = "v1.0.6"
+$AppVersion = "v1.0.7"
 
 #region functions
 
@@ -1029,6 +1029,24 @@ function Reset-GUIForm {
     Write-Verbose "Ending function   : Reset-GUIForm"
 }
 
+function Set-GUISettingsEncryptionOptionEnabled {
+    [CmdLetBinding()]
+    param(
+        [Bool]$IsEnabled = $true
+    )
+    if ($SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.IsEnabled -eq (-Not $IsEnabled)) {
+        $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.IsEnabled = $IsEnabled
+        $SyncHash.WPFControl_lblSecretEncryptionCertificateThumbprint.IsEnabled = $IsEnabled
+        $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.IsEnabled = $IsEnabled
+        if ($IsEnabled) {
+            $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.Visibility = "Visible"
+        } else {
+            $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.Visibility = "Hidden"
+        }
+        
+    }
+}
+
 function Save-OtpToUser {
     Write-Verbose "Starting function : Save-OtpToUser"
     $SelectedUser = $SyncHash.WPFControl_lvUsernames.SelectedItem
@@ -1370,6 +1388,13 @@ function Import-GUISettings {
     $SyncHash.WPFControl_tbAttribute.Text = $SyncedVariables.Settings.LDAPSettings.LDAPAttribute
     $SyncedVariables.Attribute = $SyncedVariables.Settings.LDAPSettings.LDAPAttribute
 
+    $SyncedVariables.CertificatesRetrieving = $true
+    $SyncedVariables.Certificates = @(Get-AllCertificatesFromStore)
+    Write-Verbose "$($SyncedVariables.Certificates)"
+    $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.ItemsSource = $SyncedVariables.Certificates
+    $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.SelectedIndex = -1
+    $SyncedVariables.CertificatesRetrieving = $false
+
     if ([String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.LDAPNativeFunctions)) {
         if (-Not ($SyncedVariables.Settings.LDAPSettings | Get-Member -Name LDAPNativeFunctions -ErrorAction SilentlyContinue)) {
             $SyncedVariables.Settings.LDAPSettings | Add-Member -Type NoteProperty -Name LDAPNativeFunctions -Value $false
@@ -1391,9 +1416,6 @@ function Import-GUISettings {
         $SyncHash.WPFControl_cbChangeSecretDisabled.IsChecked = $SyncedVariables.Settings.ChangeSecretDisabled
         $SyncHash.WPFControl_tbSecret.IsReadOnly = $SyncedVariables.Settings.ChangeSecretDisabled
     }
-
-
-
     if ([String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.EncryptionEnabled)) {
         if (-Not ($SyncedVariables.Settings.LDAPSettings | Get-Member -Name EncryptionEnabled -ErrorAction SilentlyContinue)) {
             $SyncedVariables.Settings.LDAPSettings | Add-Member -Type NoteProperty -Name EncryptionEnabled -Value $false
@@ -1409,8 +1431,10 @@ function Import-GUISettings {
             $SyncedVariables.Settings.LDAPSettings | Add-Member -Type NoteProperty -Name SecretEncryptionCertificateThumbprint -Value $null
         }
         $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = $null
+        Set-GUISettingsEncryptionOptionEnabled -IsEnabled $false
     } else {
         $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = $SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint
+        Set-GUISettingsEncryptionOptionEnabled -IsEnabled $true
     }
 
     if ([String]::IsNullOrEmpty($SyncedVariables.Settings.LDAPSettings.LDAPTokenSecretEncryptionCertificateSource)) {
@@ -1442,7 +1466,10 @@ function Import-GUISettings {
             $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsChecked = $false
             $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled = $false
         }
+    } else {
+        $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = $null
     }
+    Update-GUI
     Write-Verbose "Ending function   : Import-GUISettings"
 }
 function ConvertTo-PlainText {
@@ -1893,10 +1920,23 @@ function Get-CertificateFromStore {
         [Parameter(Position = 0)]
         [String]$Thumbprint
     )
-    $result = Get-ChildItem -Path Cert:\ -Recurse | Where-Object { $_.Thumbprint -eq $Thumbprint } | Select-Object -First 1
+    $result = Get-ChildItem -Path "Cert:\LocalMachine\My", "Cert:\CurrentUser\My" | Where-Object { $_.Thumbprint -like $Thumbprint } | Select-Object -First 1
     Write-Output $result
 }
 
+function Get-AllCertificatesFromStore {
+    [CmdletBinding()]
+    param (
+    )
+    $result = Get-ChildItem -Path "Cert:\LocalMachine\My", "Cert:\CurrentUser\My" | Select-Object `
+    @{Name = "Subject"; Expression = { $_.Subject.Replace('CN=', $null).Split(',') | Select-Object -First 1 } }, 
+    @{Name = "PrivateKey"; Expression = { $_.HasPrivateKey | Select-Object -First 1 } }, 
+    @{Name = "ExpiryDate"; Expression = { $_.NotAfter } }, 
+    @{Name = "Issuer"; Expression = { $_.Issuer.Replace('CN=', $null) } },
+    SerialNumber, 
+    Thumbprint
+    Write-Output $result
+}
 function Unprotect-Message {
     [CmdletBinding()]
     param(
@@ -3571,7 +3611,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Row="0"
                             Grid.Column="2"
@@ -3697,8 +3737,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                         </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="135" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="100" />
+                            <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Label Name="lblLDAPAlternativeModule"
                                Grid.Row="0"
@@ -3730,7 +3769,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                  VerticalContentAlignment="Center"
                                  Margin="2"
                                  Text=""
-                                 Width="320"
+                                 Width="Auto"
                                  ToolTip="Enter the LDAP server fqdn, ip address or domain fqdn. Leave empty for default value."
                                  TabIndex="110" />
                         <Label Name="lblLDAPPort"
@@ -3747,7 +3786,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                  VerticalContentAlignment="Center"
                                  Margin="2"
                                  Text=""
-                                 Width="320"
+                                 Width="Auto"
                                  ToolTip="Enter the LDAP server port, 0 for default. E.g. 636"
                                  TabIndex="120" />
                         <Label Name="lblLDAPUsername"
@@ -3764,7 +3803,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                  VerticalContentAlignment="Center"
                                  Margin="2"
                                  Text=""
-                                 Width="320"
+                                 Width="Auto"
                                  ToolTip="Enter the LDAP username with the required permissions"
                                  TabIndex="130" />
                         <Label Name="lblLDAPPassword"
@@ -3781,7 +3820,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                      VerticalContentAlignment="Center"
                                      Password=""
                                      Margin="2"
-                                     Width="320"
+                                     Width="Auto"
                                      ToolTip="Enter the LDAP password for the username"
                                      TabIndex="140" />
                         <Label Name="lblLDAPAttribute"
@@ -3798,11 +3837,39 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                  VerticalContentAlignment="Center"
                                  Margin="2"
                                  Text=""
-                                 Width="320"
+                                 Width="Auto"
                                  ToolTip="Enter the LDAP attribute name for storing the OTP seed"
                                  TabIndex="150" />
+
+                    </Grid>
+                </GroupBox>
+                <GroupBox Name="gbEncryptionSettings"
+                          Grid.Row="2"
+                          Grid.Column="0"
+                          Grid.ColumnSpan="2"
+                          Header="Encryption Settings"
+                          Height="Auto"
+                          Margin="2"
+                          Width="Auto"
+                          IsEnabled="True">
+                    <Grid Margin="3,6,3,3">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
                         <Label Name="lblLDAPSecretEncryptionEnabled"
-                               Grid.Row="6"
+                               Grid.Row="1"
                                Grid.Column="0"
                                HorizontalAlignment="Left"
                                VerticalContentAlignment="Center"
@@ -3810,7 +3877,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                Margin="2"
                                Content="Secret Encryption" />
                         <CheckBox Name="cbLDAPSecretEncryptionEnabled"
-                                  Grid.Row="6"
+                                  Grid.Row="1"
                                   Grid.Column="1"
                                   VerticalContentAlignment="Center"
                                   Margin="2"
@@ -3818,22 +3885,57 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                   ToolTip="Check if you want to use encrypted token secrets"
                                   TabIndex="160" />
                         <Label Name="lblSecretEncryptionCertificateThumbprint"
-                               Grid.Row="7"
+                               Grid.Row="2"
                                Grid.Column="0"
                                HorizontalAlignment="Left"
                                VerticalContentAlignment="Center"
                                Margin="2"
                                Content="Certificate Thumbprint" />
                         <TextBox Name="tbSecretEncryptionCertificateThumbprint"
-                                 Grid.Row="7"
+                                 Grid.Row="2"
                                  Grid.Column="1"
                                  VerticalContentAlignment="Center"
+                                 HorizontalAlignment="Stretch"
                                  Margin="2"
                                  Text=""
                                  TabIndex="170"
+                                 Width="Auto"
                                  ToolTip="Certificate thumbprint to decrypt the secret" />
+                        <ListView Name="lbSelectSecretEncryptionCertificateThumbprint"
+                                  Grid.Row="3"
+                                  Margin="2"
+                                  Grid.Column="1"
+                                  MaxWidth="424"
+                                  MinHeight="70"
+                                  MaxHeight="150"
+                                  FontSize="8"
+                                  TabIndex="175"
+                                  SelectionMode="Single">
+                            <ListView.View>
+                            <GridView>
+                                    <GridViewColumn Header="Subject"
+                                                    DisplayMemberBinding="{Binding Subject}"
+                                                    Width="Auto" /> 
+                                    <GridViewColumn Header="ExpiryDate"
+                                                    DisplayMemberBinding="{Binding ExpiryDate}"
+                                                    Width="Auto" />
+                                    <GridViewColumn Header="PrivateKey"
+                                                    DisplayMemberBinding="{Binding PrivateKey}"
+                                                    Width="Auto" />
+                                    <GridViewColumn Header="Issuer"
+                                                    DisplayMemberBinding="{Binding Issuer}"
+                                                    Width="Auto" />
+                                    <GridViewColumn Header="SerialNumber"
+                                                    DisplayMemberBinding="{Binding SerialNumber}"
+                                                    Width="Auto" />
+                                    <GridViewColumn Header="Thumbprint"
+                                                    DisplayMemberBinding="{Binding Thumbprint}"
+                                                    Width="Auto" />
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
                     </Grid>
-                </GroupBox>
+                </GroupBox>                
             </Grid>
         </TabItem>
         <TabItem Name="tiEncryption"
@@ -4651,6 +4753,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             if ($this.IsChecked -ne $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled) {
                 if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
             }
+            Set-GUISettingsEncryptionOptionEnabled -IsEnabled $true
         }
     )
 
@@ -4663,6 +4766,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             if ($this.IsChecked -ne $SyncedVariables.Settings.LDAPSettings.EncryptionEnabled) {
                 if ( -Not $SyncedVariables.SettingsChanged ) { $SyncedVariables.SettingsChanged = $true }
             }
+            Set-GUISettingsEncryptionOptionEnabled -IsEnabled $false
         }
     )
 
@@ -4825,6 +4929,20 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         }
     )
 
+#lbSelectSecretEncryptionCertificateThumbprint
+$SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.Add_SelectionChanged(
+    {
+        param(
+            [Parameter(Mandatory)][Object]$sender,
+            [Parameter(Mandatory)][Windows.Controls.SelectionChangedEventArgs]$e
+        )
+        Write-Verbose "$($sender.SelectedItem.Thumbprint)"
+        if (-Not ($SyncedVariables.CertificatesRetrieving -eq $true)) {
+            $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = $sender.SelectedItem.Thumbprint
+        }
+    }
+)
+
     $SyncHash.WPFControl_tbNewCertificateThumbprint.Add_TextChanged({
             param(
                 [Parameter(Mandatory)][Object]$sender,
@@ -4874,10 +4992,10 @@ Stop-GUIApplication
 Write-Verbose "Bye, thank you for using OTP4ADC"
 
 # SIG # Begin signature block
-# MIITYgYJKoZIhvcNAQcCoIITUzCCE08CAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIIkrQYJKoZIhvcNAQcCoIIknjCCJJoCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDhc0lp0RVCIWmT
-# Ke5NsLHTsUCwyWkNHxmXLgJa/z2SWqCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDXnxHiyHCji9Kn
+# hYeear+L0IQf+67liE1sni4MhlUC/KCCHnAwggTzMIID26ADAgECAhAsJ03zZBC0
 # i/247uUvWN5TMA0GCSqGSIb3DQEBCwUAMHwxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # ExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoT
 # D1NlY3RpZ28gTGltaXRlZDEkMCIGA1UEAxMbU2VjdGlnbyBSU0EgQ29kZSBTaWdu
@@ -4965,17 +5083,109 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # ngVR5UR43QHesXWYDVQk/fBO4+L4g71yuss9Ou7wXheSaG3IYfmm8SoKC6W59J7u
 # mDIFhZ7r+YMp08Ysfb06dy6LN0KgaoLtO0qqlBCk4Q34F8W2WnkzGJLjtXX4oemO
 # CiUe5B7xn1qHI/+fpFGe+zmAEc3btcSnqIBv5VPU4OOiwtJbGvoyJi1qV3AcPKRY
-# LqPzW0sH3DJZ84enGm1YMYICQzCCAj8CAQEwgZAwfDELMAkGA1UEBhMCR0IxGzAZ
-# BgNVBAgTEkdyZWF0ZXIgTWFuY2hlc3RlcjEQMA4GA1UEBxMHU2FsZm9yZDEYMBYG
-# A1UEChMPU2VjdGlnbyBMaW1pdGVkMSQwIgYDVQQDExtTZWN0aWdvIFJTQSBDb2Rl
-# IFNpZ25pbmcgQ0ECECwnTfNkELSL/bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQw
-# GAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGC
-# NwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQx
-# IgQgeZyvz2owFnfyyAOBHEllTFmLu6b15Q3f/22A0WToBa4wDQYJKoZIhvcNAQEB
-# BQAEggEAc5pb8Fg4aSk7d3LESuwG5afz4TsSUs5E2Vn3ezc9ESWhz3Z4g11m+oId
-# tv/yXprvfVGT9whoJgdw0pY9V6xttlCVZp+qr98g27ie2GgKjPfNhrXYDJGm0sv1
-# ouCIuiHjkB3NL0xNaEozCgSrYEdIKYqKA22m1ZzsuxkJ8raomVlAkcPI2WSdmIEx
-# G1QI4jgQp6aTgBw0vxryJfQOk2vo0N8Ybabvb3qD+Rthn/smKIm+HSf2+dYxbdcy
-# DFuFdDzEpQpLdJBsVG8FtB1L5kmt2vcWnBg55g/qYxB9OrXBnYKYecUbL0+e7wb1
-# kxmzTaqZyNBU1GBgEYCmMeLcihe1wg==
+# LqPzW0sH3DJZ84enGm1YMIIG7DCCBNSgAwIBAgIQMA9vrN1mmHR8qUY2p3gtuTAN
+# BgkqhkiG9w0BAQwFADCBiDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCk5ldyBKZXJz
+# ZXkxFDASBgNVBAcTC0plcnNleSBDaXR5MR4wHAYDVQQKExVUaGUgVVNFUlRSVVNU
+# IE5ldHdvcmsxLjAsBgNVBAMTJVVTRVJUcnVzdCBSU0EgQ2VydGlmaWNhdGlvbiBB
+# dXRob3JpdHkwHhcNMTkwNTAyMDAwMDAwWhcNMzgwMTE4MjM1OTU5WjB9MQswCQYD
+# VQQGEwJHQjEbMBkGA1UECBMSR3JlYXRlciBNYW5jaGVzdGVyMRAwDgYDVQQHEwdT
+# YWxmb3JkMRgwFgYDVQQKEw9TZWN0aWdvIExpbWl0ZWQxJTAjBgNVBAMTHFNlY3Rp
+# Z28gUlNBIFRpbWUgU3RhbXBpbmcgQ0EwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAw
+# ggIKAoICAQDIGwGv2Sx+iJl9AZg/IJC9nIAhVJO5z6A+U++zWsB21hoEpc5Hg7Xr
+# xMxJNMvzRWW5+adkFiYJ+9UyUnkuyWPCE5u2hj8BBZJmbyGr1XEQeYf0RirNxFrJ
+# 29ddSU1yVg/cyeNTmDoqHvzOWEnTv/M5u7mkI0Ks0BXDf56iXNc48RaycNOjxN+z
+# xXKsLgp3/A2UUrf8H5VzJD0BKLwPDU+zkQGObp0ndVXRFzs0IXuXAZSvf4DP0REK
+# V4TJf1bgvUacgr6Unb+0ILBgfrhN9Q0/29DqhYyKVnHRLZRMyIw80xSinL0m/9NT
+# IMdgaZtYClT0Bef9Maz5yIUXx7gpGaQpL0bj3duRX58/Nj4OMGcrRrc1r5a+2kxg
+# zKi7nw0U1BjEMJh0giHPYla1IXMSHv2qyghYh3ekFesZVf/QOVQtJu5FGjpvzdeE
+# 8NfwKMVPZIMC1Pvi3vG8Aij0bdonigbSlofe6GsO8Ft96XZpkyAcSpcsdxkrk5WY
+# nJee647BeFbGRCXfBhKaBi2fA179g6JTZ8qx+o2hZMmIklnLqEbAyfKm/31X2xJ2
+# +opBJNQb/HKlFKLUrUMcpEmLQTkUAx4p+hulIq6lw02C0I3aa7fb9xhAV3PwcaP7
+# Sn1FNsH3jYL6uckNU4B9+rY5WDLvbxhQiddPnTO9GrWdod6VQXqngwIDAQABo4IB
+# WjCCAVYwHwYDVR0jBBgwFoAUU3m/WqorSs9UgOHYm8Cd8rIDZsswHQYDVR0OBBYE
+# FBqh+GEZIA/DQXdFKI7RNV8GEgRVMA4GA1UdDwEB/wQEAwIBhjASBgNVHRMBAf8E
+# CDAGAQH/AgEAMBMGA1UdJQQMMAoGCCsGAQUFBwMIMBEGA1UdIAQKMAgwBgYEVR0g
+# ADBQBgNVHR8ESTBHMEWgQ6BBhj9odHRwOi8vY3JsLnVzZXJ0cnVzdC5jb20vVVNF
+# UlRydXN0UlNBQ2VydGlmaWNhdGlvbkF1dGhvcml0eS5jcmwwdgYIKwYBBQUHAQEE
+# ajBoMD8GCCsGAQUFBzAChjNodHRwOi8vY3J0LnVzZXJ0cnVzdC5jb20vVVNFUlRy
+# dXN0UlNBQWRkVHJ1c3RDQS5jcnQwJQYIKwYBBQUHMAGGGWh0dHA6Ly9vY3NwLnVz
+# ZXJ0cnVzdC5jb20wDQYJKoZIhvcNAQEMBQADggIBAG1UgaUzXRbhtVOBkXXfA3oy
+# Cy0lhBGysNsqfSoF9bw7J/RaoLlJWZApbGHLtVDb4n35nwDvQMOt0+LkVvlYQc/x
+# QuUQff+wdB+PxlwJ+TNe6qAcJlhc87QRD9XVw+K81Vh4v0h24URnbY+wQxAPjeT5
+# OGK/EwHFhaNMxcyyUzCVpNb0llYIuM1cfwGWvnJSajtCN3wWeDmTk5SbsdyybUFt
+# Z83Jb5A9f0VywRsj1sJVhGbks8VmBvbz1kteraMrQoohkv6ob1olcGKBc2NeoLvY
+# 3NdK0z2vgwY4Eh0khy3k/ALWPncEvAQ2ted3y5wujSMYuaPCRx3wXdahc1cFaJqn
+# yTdlHb7qvNhCg0MFpYumCf/RoZSmTqo9CfUFbLfSZFrYKiLCS53xOV5M3kg9mzSW
+# mglfjv33sVKRzj+J9hyhtal1H3G/W0NdZT1QgW6r8NDT/LKzH7aZlib0PHmLXGTM
+# ze4nmuWgwAxyh8FuTVrTHurwROYybxzrF06Uw3hlIDsPQaof6aFBnf6xuKBlKjTg
+# 3qj5PObBMLvAoGMs/FwWAKjQxH/qEZ0eBsambTJdtDgJK0kHqv3sMNrxpy/Pt/36
+# 0KOE2See+wFmd7lWEOEgbsausfm2usg1XTN2jvF8IAwqd661ogKGuinutFoAsYyr
+# 4/kKyVRd1LlqdJ69SK6YMIIHBzCCBO+gAwIBAgIRAIx3oACP9NGwxj2fOkiDjWsw
+# DQYJKoZIhvcNAQEMBQAwfTELMAkGA1UEBhMCR0IxGzAZBgNVBAgTEkdyZWF0ZXIg
+# TWFuY2hlc3RlcjEQMA4GA1UEBxMHU2FsZm9yZDEYMBYGA1UEChMPU2VjdGlnbyBM
+# aW1pdGVkMSUwIwYDVQQDExxTZWN0aWdvIFJTQSBUaW1lIFN0YW1waW5nIENBMB4X
+# DTIwMTAyMzAwMDAwMFoXDTMyMDEyMjIzNTk1OVowgYQxCzAJBgNVBAYTAkdCMRsw
+# GQYDVQQIExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAW
+# BgNVBAoTD1NlY3RpZ28gTGltaXRlZDEsMCoGA1UEAwwjU2VjdGlnbyBSU0EgVGlt
+# ZSBTdGFtcGluZyBTaWduZXIgIzIwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIK
+# AoICAQCRh0ssi8HxHqCe0wfGAcpSsL55eV0JZgYtLzV9u8D7J9pCalkbJUzq70DW
+# mn4yyGqBfbRcPlYQgTU6IjaM+/ggKYesdNAbYrw/ZIcCX+/FgO8GHNxeTpOHuJre
+# TAdOhcxwxQ177MPZ45fpyxnbVkVs7ksgbMk+bP3wm/Eo+JGZqvxawZqCIDq37+fW
+# uCVJwjkbh4E5y8O3Os2fUAQfGpmkgAJNHQWoVdNtUoCD5m5IpV/BiVhgiu/xrM2H
+# YxiOdMuEh0FpY4G89h+qfNfBQc6tq3aLIIDULZUHjcf1CxcemuXWmWlRx06mnSlv
+# 53mTDTJjU67MximKIMFgxvICLMT5yCLf+SeCoYNRwrzJghohhLKXvNSvRByWgiKV
+# KoVUrvH9Pkl0dPyOrj+lcvTDWgGqUKWLdpUbZuvv2t+ULtka60wnfUwF9/gjXcRX
+# yCYFevyBI19UCTgqYtWqyt/tz1OrH/ZEnNWZWcVWZFv3jlIPZvyYP0QGE2Ru6eEV
+# YFClsezPuOjJC77FhPfdCp3avClsPVbtv3hntlvIXhQcua+ELXei9zmVN29OfxzG
+# PATWMcV+7z3oUX5xrSR0Gyzc+Xyq78J2SWhi1Yv1A9++fY4PNnVGW5N2xIPugr4s
+# rjcS8bxWw+StQ8O3ZpZelDL6oPariVD6zqDzCIEa0USnzPe4MQIDAQABo4IBeDCC
+# AXQwHwYDVR0jBBgwFoAUGqH4YRkgD8NBd0UojtE1XwYSBFUwHQYDVR0OBBYEFGl1
+# N3u7nTVCTr9X05rbnwHRrt7QMA4GA1UdDwEB/wQEAwIGwDAMBgNVHRMBAf8EAjAA
+# MBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMIMEAGA1UdIAQ5MDcwNQYMKwYBBAGyMQEC
+# AQMIMCUwIwYIKwYBBQUHAgEWF2h0dHBzOi8vc2VjdGlnby5jb20vQ1BTMEQGA1Ud
+# HwQ9MDswOaA3oDWGM2h0dHA6Ly9jcmwuc2VjdGlnby5jb20vU2VjdGlnb1JTQVRp
+# bWVTdGFtcGluZ0NBLmNybDB0BggrBgEFBQcBAQRoMGYwPwYIKwYBBQUHMAKGM2h0
+# dHA6Ly9jcnQuc2VjdGlnby5jb20vU2VjdGlnb1JTQVRpbWVTdGFtcGluZ0NBLmNy
+# dDAjBggrBgEFBQcwAYYXaHR0cDovL29jc3Auc2VjdGlnby5jb20wDQYJKoZIhvcN
+# AQEMBQADggIBAEoDeJBCM+x7GoMJNjOYVbudQAYwa0Vq8ZQOGVD/WyVeO+E5xFu6
+# 6ZWQNze93/tk7OWCt5XMV1VwS070qIfdIoWmV7u4ISfUoCoxlIoHIZ6Kvaca9QIV
+# y0RQmYzsProDd6aCApDCLpOpviE0dWO54C0PzwE3y42i+rhamq6hep4TkxlVjwmQ
+# Lt/qiBcW62nW4SW9RQiXgNdUIChPynuzs6XSALBgNGXE48XDpeS6hap6adt1pD55
+# aJo2i0OuNtRhcjwOhWINoF5w22QvAcfBoccklKOyPG6yXqLQ+qjRuCUcFubA1X9o
+# GsRlKTUqLYi86q501oLnwIi44U948FzKwEBcwp/VMhws2jysNvcGUpqjQDAXsCkW
+# mcmqt4hJ9+gLJTO1P22vn18KVt8SscPuzpF36CAT6Vwkx+pEC0rmE4QcTesNtbiG
+# oDCni6GftCzMwBYjyZHlQgNLgM7kTeYqAT7AXoWgJKEXQNXb2+eYEKTx6hkbgFT6
+# R4nomIGpdcAO39BolHmhoJ6OtrdCZsvZ2WsvTdjePjIeIOTsnE1CjZ3HM5mCN0TU
+# JikmQI54L7nu+i/x8Y/+ULh43RSW3hwOcLAqhWqxbGjpKuQQK24h/dN8nTfkKgbW
+# w/HXaONPB3mBCBP+smRe6bE85tB4I7IJLOImYr87qZdRzMdEMoGyr8/fMYIFkzCC
+# BY8CAQEwgZAwfDELMAkGA1UEBhMCR0IxGzAZBgNVBAgTEkdyZWF0ZXIgTWFuY2hl
+# c3RlcjEQMA4GA1UEBxMHU2FsZm9yZDEYMBYGA1UEChMPU2VjdGlnbyBMaW1pdGVk
+# MSQwIgYDVQQDExtTZWN0aWdvIFJTQSBDb2RlIFNpZ25pbmcgQ0ECECwnTfNkELSL
+# /bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAA
+# oQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4w
+# DAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgF0F1YqPzEoWq4rQJ49UMCcSI
+# I4RPm6XXygoTQ6J4G1wwDQYJKoZIhvcNAQEBBQAEggEANV7jaOmcBAbLcymoGByY
+# v2zTnUNAFJcvCexnr4JaI0/DMoRdsyJChboZPLJlwWhAmHP0AoMbhatFrp8etW8z
+# QIgrtuEMYSXqDBeKbVDmNh6fXFYXpyv4OPB0zTuh0zP819KBAuzc1RXpzlQEeDSl
+# ADSZVpGU/+ECEYhozMxR5BsAYYBmskJM7Fil22VLHXcsox5NaPEZyCkqMb01nfso
+# bQdMzmAe2ShdOMfXoPIvbP7hMg5rAieVO0MXavHxJKb4JddnoNE+ZN1wEKVZMb9O
+# Xb7fYX5jvmGEWef5acH00IcUNJoPqSebBQ3E3+25yV1zk83dimZdvH5DuZP6GWmZ
+# cqGCA0wwggNIBgkqhkiG9w0BCQYxggM5MIIDNQIBATCBkjB9MQswCQYDVQQGEwJH
+# QjEbMBkGA1UECBMSR3JlYXRlciBNYW5jaGVzdGVyMRAwDgYDVQQHEwdTYWxmb3Jk
+# MRgwFgYDVQQKEw9TZWN0aWdvIExpbWl0ZWQxJTAjBgNVBAMTHFNlY3RpZ28gUlNB
+# IFRpbWUgU3RhbXBpbmcgQ0ECEQCMd6AAj/TRsMY9nzpIg41rMA0GCWCGSAFlAwQC
+# AgUAoHkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcN
+# MjIwMjIwMjAzNjQwWjA/BgkqhkiG9w0BCQQxMgQwmzAr6a1szJYEYNIhbZJ0TNbK
+# SvSzKBym1ObztIfJN/A6C451EBm0H6o59mfakhiPMA0GCSqGSIb3DQEBAQUABIIC
+# AFo86lCC1m1pdZZ3YUGg6IS1BOPstyGXlDrpI0UfvdsoYkqO6SCnV7b5VjHW4BnF
+# MgoltKSu5hAiAnrX7mBN3ETDbI0UPRcMqHjBLXv9a19gsUt6tql1VCEttvNY8QIq
+# cqufMiW6alQlKj8Rq02Tg98Vy5axJ73mdMTF/3k8YMGSrX/5Q1JL9WPUBX6+qkpe
+# 4f4uqGU3thMNKF3+w5T2qJHd8i7NXVK1NbdCsuU8H0WadMAJyZLKWp95Bm9aewe+
+# +d9/hMQ7cUUikmtVa2gpdYVMfvNqHezT4khJorcKArzAMTifFS0Qe8Rn0gsEXl/Q
+# lQtbFknm88dKRIfVeCtCd2pvopbg5fZSKB1tdGryVBDrYBfv4pTqxcxlqXHiSf+k
+# BUuVFHAXqcw+5WHnV2CJmRYUDGMkUGA/PP+AFGBRJy49aVLgDl/9aEqYwZV295Ao
+# 6i7DxsFr4VDZfhF+Mw96+CA2zu6K6TQA/kUN7pxlQITMPf3NOzLV5mGqvdWod6ab
+# n9IHwzoRl2cGi58KePzLTSMY92FaVYq0o209xqdqWetITI89Mow+LyDbN1QQcib0
+# OHAAtZ2/z+ul/iYX1sv2N8bfLxu59wlUAcLlCtsbZKexURJuvEIadKXJ9djzaQbi
+# 2BlVX93OsRMNl8x3NKIUNx+M8X98NPdKaBJY/nCB28Jc
 # SIG # End signature block
