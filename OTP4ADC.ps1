@@ -42,7 +42,7 @@
 
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v1.0.8
+    Version   : v1.0.9
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -133,7 +133,7 @@ Param(
     [String]$Delimiter = ","
 )
 
-$AppVersion = "v1.0.8"
+$AppVersion = "v1.0.9"
 
 #region functions
 
@@ -2176,7 +2176,7 @@ function Test-ValidClearTextSecret {
     $result = $false
     try {
         if (-Not [String]::IsNullOrEmpty($secret)) {
-            if ($secret -match '^#@(?>[a-zA-Z0-9]*=[a-zA-Z0-9]*\&\,){1,}$') {
+            if ($secret -match '^#@(?>[a-zA-Z0-9+\._]*=[a-zA-Z0-9]*\&\,){1,}$') {
                 $result = $true
             }
         }
@@ -2787,7 +2787,7 @@ function Invoke-StartEncryption {
                     Write-ToLogFile -I -C OTP4ADC-Encryption -M "Source Attribute: $SourceAttribute is ClearText"
                     $devices = ConvertFrom-ClearTextUserAttribute $ADUser."$SourceAttribute"
                 } else {
-                    Write-ToLogFile -W -C OTP4ADC-Encryption -M "Source Attribute: $SourceAttribute is UNKNOWN: $($ADUser."$SourceAttribute")"
+                    Write-ToLogFile -W -C OTP4ADC-Encryption -M "Source Attribute: $SourceAttribute is UNKNOWN ($($ADUser."$SourceAttribute"))"
                     $devices = $false
                 }
                 Write-ToLogFile -D -C OTP4ADC-Encryption -M "Original Source Data: $($ADUser."$SourceAttribute")"
@@ -2998,7 +2998,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                 Write-Verbose "Source Attribute: $Attribute is ClearText"
                 $DeviceSecrets += ConvertFrom-ClearTextUserAttribute $ADUser.Attribute
             } else {
-                Write-Verbose "Source Attribute: $Attribute is UNKNOWN: $($ADUser.Attribute)"
+                Write-Verbose "Source Attribute: $Attribute is UNKNOWN ($($ADUser.Attribute))"
                 $DeviceSecrets = @()
             }
         } else {
@@ -4325,17 +4325,18 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
             )
             Write-Verbose "btnAddQR Click"
             Update-Gui
+            $newDeviceName = $SyncHash.WPFControl_tbDeviceName.Text.Replace(' ','+')
             if ($SyncedVariables.DeviceSecrets.Count -ge 4) {
                 $null = [Windows.MessageBox]::Show("The maximum of allowed devices reached.`nTo continue remove one device!", "Maximum Reached!", [Windows.MessageBoxButton]::OK, [Windows.MessageBoxImage]::Error)
-            } elseif ($SyncedVariables.DeviceSecrets | Where-Object DeviceName -EQ $($SyncHash.WPFControl_tbDeviceName.Text)) {
-                $null = [Windows.MessageBox]::Show("The Device Name `"$($SyncHash.WPFControl_tbDeviceName.Text)`" already exists", "Double Entry!", [Windows.MessageBoxButton]::OK, [Windows.MessageBoxImage]::Error)
+            } elseif ($SyncedVariables.DeviceSecrets | Where-Object DeviceName -like $newDeviceName) {
+                $null = [Windows.MessageBox]::Show("The Device Name `"$($newDeviceName.Replace('+',' '))`" already exists", "Double Entry!", [Windows.MessageBoxButton]::OK, [Windows.MessageBoxImage]::Error)
             } elseif ($SyncedVariables.DeviceSecrets | Where-Object Secret -EQ $($SyncedVariables.B32Secret)) {
                 $null = [Windows.MessageBox]::Show("The Secret already exists!`nGenerate a new secret", "Double Entry!", [Windows.MessageBoxButton]::OK, [Windows.MessageBoxImage]::Error)
             } else {
                 if (-Not $SyncHash.WPFControl_btnSaveOtp.IsEnabled) { $SyncHash.WPFControl_btnSaveOtp.IsEnabled = $true }
                 if (-Not $SyncHash.WPFControl_btnExportPosh.IsEnabled) { $SyncHash.WPFControl_btnExportPosh.IsEnabled = $true }
                 $SyncedVariables.DeviceSecrets += [PSCustomObject]@{
-                    DeviceName = $($SyncHash.WPFControl_tbDeviceName.Text)
+                    DeviceName = $newDeviceName
                     Secret     = $($SyncedVariables.B32Secret)
                 }
                 $SyncHash.WPFControl_lvOtps.ItemsSource = $SyncedVariables.DeviceSecrets
@@ -4377,11 +4378,11 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                 [Parameter(Mandatory)][Windows.Controls.TextChangedEventArgs]$e
             )
             # tbDeviceName Text Changed Event
-            if ($this.Text -match '[^a-zA-z0-9]') {
-                Write-Verbose "tbDeviceName Text Changed, but not in range 'a-zA-z0-9'"
+            if ($this.Text -match '[^a-zA-z0-9\ \._]') {
+                Write-Verbose "tbDeviceName Text Changed, but not in range 'a-zA-z0-9 ._'"
                 #Replace everything not in range 0-9
                 $cursorPos = $this.SelectionStart
-                $this.Text = $this.Text -replace '[^a-zA-z0-9]', $null
+                $this.Text = $this.Text -replace '[^a-zA-z0-9\ \._]', $null
                 # move the cursor to the end of the text:
                 # $this.SelectionStart = $this.Text.Length
         
@@ -4461,7 +4462,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                     Write-Verbose "Source Attribute: $SourceAttribute is ClearText"
                     $SyncedVariables.DeviceSecrets += ConvertFrom-ClearTextUserAttribute $SelectedItem.Attribute
                 } else {
-                    Write-Verbose "Source Attribute: $SourceAttribute is UNKNOWN: $($SelectedItem.Attribute)"
+                    Write-Verbose "Source Attribute: $SourceAttribute is UNKNOWN ($($SelectedItem.Attribute))"
                     $SyncedVariables.DeviceSecrets = @()
                 }
 
@@ -4501,7 +4502,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                 $SelectedItem = $SyncHash.WPFControl_lvOtps.SelectedItem
                 $SyncHash.WPFControl_tbSecret.Text = $SelectedItem.Secret
                 $SyncedVariables.B32Secret = $SelectedItem.Secret
-                $SyncHash.WPFControl_tbDeviceName.Text = $SelectedItem.DeviceName
+                $SyncHash.WPFControl_tbDeviceName.Text = $SelectedItem.DeviceName.Replace('+',' ')
                 if (-Not $SyncHash.WPFControl_btnViewTOTPToken.IsEnabled) { $SyncHash.WPFControl_btnViewTOTPToken.IsEnabled = $true }
             }
         }
@@ -5017,8 +5018,8 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # SIG # Begin signature block
 # MIITYgYJKoZIhvcNAQcCoIITUzCCE08CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCA0M2CZ1pUb4I8D
-# yoMs8eJk3NKNyCrXRL2twWSUnC2KqKCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAI/w3IjSRN+1u7
+# 0msfxKkKnjH4yfipNIL8NBAuv5KiNaCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
 # i/247uUvWN5TMA0GCSqGSIb3DQEBCwUAMHwxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # ExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoT
 # D1NlY3RpZ28gTGltaXRlZDEkMCIGA1UEAxMbU2VjdGlnbyBSU0EgQ29kZSBTaWdu
@@ -5112,11 +5113,11 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # IFNpZ25pbmcgQ0ECECwnTfNkELSL/bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQw
 # GAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGC
 # NwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQx
-# IgQgNDfpQ6p6NlXZvCqXvVLLGNJoF/ldLbrxfp/lZ3kGr1MwDQYJKoZIhvcNAQEB
-# BQAEggEAkuQDL6PmNClwpoApbsxG7+XFZMMgKp5iByeh430sOHlli1pLofOnNCPL
-# hbWX65M3el5MPr0b4PwY/xMbow45xypTcyMZF9C7y/BNOMNVRgJKYVmiSl577PrP
-# u5kilarmLXZ8yd++lixODYOYY11FWOg5Pv+DcXtgBx0J1RdzflmQw3CXVGAgbFrj
-# J/b6tbpCCEghODqwefX3nPzhjXKPaGJFa+W4KXJ+0tB4XukBdQ6oVF920ORisrBl
-# HxSzjvSUw+gPJERj+6MVVWYe3OQZiMJTY2V8K1eWrk+YfnaGPJaYwRiSRyJyO/b0
-# wjfkJn09EAbR06rAn3cL/lCfvmAE6A==
+# IgQgCLN+qzMQr0penb+kRzVCstpgZqQDli5fafwVuoRrEqUwDQYJKoZIhvcNAQEB
+# BQAEggEAPp+aURJyLYQKF+2AoOQaHHxtsaN0wNc+9xOuQsH3J4wspd5LZjkNTKmk
+# fFo0GlnOIZA7socjFiecC6BpTTwnANbJA4952mOpJJQ1ANbga+mVcWk8KSHDPiw4
+# DKhlLB3Wnu5c+puUFj2HAgZw80RUaC/ysb1sD7n2BK9BsJkPDXgSsE0wM7LOSyrU
+# 8Z9JvhsdwaBXvLiK9ox4N0ziLaL2QHMygbI4QrWbhgEvKhD23cAo8yunAgUtrTRI
+# +uDtvpPd0gDcuq/qbfVDI2p0Uo/GFIQ0cNUyMHqOfcNTThlYvueVee4V8cS1Tzcu
+# 2qYMen9KwL4ot7XiKdVMztRpZmYD9g==
 # SIG # End signature block
