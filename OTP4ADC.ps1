@@ -42,7 +42,7 @@
 
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v1.0.10
+    Version   : v1.0.11
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -133,7 +133,7 @@ Param(
     [String]$Delimiter = ","
 )
 
-$AppVersion = "v1.0.10"
+$AppVersion = "v1.0.11"
 
 #region functions
 
@@ -3771,7 +3771,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                   Grid.Column="1"
                                   VerticalContentAlignment="Center"
                                   Margin="2"
-                                  Content="Experimental option!"
+                                  Content="(ActiveDirectory Module not needed)"
                                   ToolTip="When checked the PowerShell module 'ActiveDirectory' will not be used, but an alternative option (ADSI)."
                                   TabIndex="100" />
                         <Label Name="lblLDAPServer"
@@ -5018,8 +5018,8 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # SIG # Begin signature block
 # MIIkrQYJKoZIhvcNAQcCoIIknjCCJJoCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAJfVRFUY/V9Jiu
-# gNVF3iLXB/ehJ/dddUp+OO/G0s0je6CCHnAwggTzMIID26ADAgECAhAsJ03zZBC0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDmfSx+qsYJYsl7
+# fu995EIgCC0KJt2a1MxgGDdlfp+U06CCHnAwggTzMIID26ADAgECAhAsJ03zZBC0
 # i/247uUvWN5TMA0GCSqGSIb3DQEBCwUAMHwxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # ExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoT
 # D1NlY3RpZ28gTGltaXRlZDEkMCIGA1UEAxMbU2VjdGlnbyBSU0EgQ29kZSBTaWdu
@@ -5187,29 +5187,29 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # MSQwIgYDVQQDExtTZWN0aWdvIFJTQSBDb2RlIFNpZ25pbmcgQ0ECECwnTfNkELSL
 # /bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAA
 # oQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4w
-# DAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgZDbReuLqsCUttiWtokvDhDOl
-# HjFyHyliiKEmdXe4fAEwDQYJKoZIhvcNAQEBBQAEggEAKNc1nk67TrHAQM9JpZDf
-# kFbbSR8JbTQE+vf9bQagpZYv8xGPkRe/BmOBYawaAsJd3roUCQXTSkoBRrHPz6hT
-# ciQ8F5TrcIZC+ly+ArwadBuMvVnFfeAIJLBxiszDPPXsCGxCwRgr5AnucQrd5JQM
-# rno82NhVge/Iu2hBVU5z/S3GpcrKt+WouptX4t21ur6nNi7fyyQB6g03Cy4UZVmX
-# ngYi84hjQveAMY928YJJ7fyj1o8sqY8FUgC5HjobkNYdLCoGQLViGS5ne2lvEpH9
-# sUncLhixva9u7x+axk4SGS7HVQoV/gqgrzkmxr5u10wXFt/c7a3Lgr4AHjmtkjXQ
-# p6GCA0wwggNIBgkqhkiG9w0BCQYxggM5MIIDNQIBATCBkjB9MQswCQYDVQQGEwJH
+# DAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQg7GNM0Yi1OEaXUjzdP8bt5yS0
+# LXBhY/1sx9O61Ox+ePkwDQYJKoZIhvcNAQEBBQAEggEAR0PomN2dd1dtOIwIWpW2
+# Lny/Y7ssjxcTFkeP8lNBfUsbTd8m5gnJRBmUu9F1FyGJA8SHKllDW0SBakZNRTbl
+# 0roSlcVzGuPF4ttx+U9a7NufGB5KQdRr7Ued+1kFhBIv2RcY0vd9gBmStu8JnJc9
+# 2TZX0+GwTbXhgVj63zP3a6TIBIIl+QDlgzdGOsziwKToOV7YYZbu4pnzs76S4U7B
+# wMnzWdnwQWm3o3LIVL7/HQ6G7ATmhnIJ8+XSThVU6un9ImzE0NuYGdnOq5Kz+iTN
+# gbKzBJcMaxPf44BOX1J84vcH2vTyG6f3K/8cAsxWbQxErFgkSB6V0hxQ9LZ3U5bK
+# z6GCA0wwggNIBgkqhkiG9w0BCQYxggM5MIIDNQIBATCBkjB9MQswCQYDVQQGEwJH
 # QjEbMBkGA1UECBMSR3JlYXRlciBNYW5jaGVzdGVyMRAwDgYDVQQHEwdTYWxmb3Jk
 # MRgwFgYDVQQKEw9TZWN0aWdvIExpbWl0ZWQxJTAjBgNVBAMTHFNlY3RpZ28gUlNB
 # IFRpbWUgU3RhbXBpbmcgQ0ECEQCMd6AAj/TRsMY9nzpIg41rMA0GCWCGSAFlAwQC
 # AgUAoHkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcN
-# MjIwNDAyMTU1MDQyWjA/BgkqhkiG9w0BCQQxMgQwLSLU+Ii/7ZgSwVq6Zd1Ukr3n
-# HYTZ7nJcUeFtKVnyXEInKV82ls3PxhkxD6O9VbK+MA0GCSqGSIb3DQEBAQUABIIC
-# ABLC1i8OmEBvOAj87+ELEGoTFmIS3SF4oz2imbBaCEOuiq1jMpqU+iHOofpdgHpT
-# bqdjB0qJK1g8hBaOvwOy0jiJn23STcUcs+P1oiDN/HPqmX83stJBDduDEW+tF7yS
-# iVfi/kpo0PQk1qPOsnL2Gnv4UmwI5kxMP3rmFYRIHPH24gC+EuiJO09/3J41ouWx
-# UbmgMP+pTe9vwAA1FtnmqbSPF6ph9Bd0ueu7t/hhSEEouezn9nhUuVM7RLX0NT9S
-# 4Jdc8z3Sjrs1czm4KXUzuS489a1Fn6K+IKQjo1hHph7dAURhmKwqH7EAXEOYPFEK
-# bojFSetakTz9uuR9HTjBQkgzc2ngDVhJo3vqL+HxLmcYitFhu6/9BeTfuNVoVeQ3
-# 0gRQqOMzd+gcOOsF08/M1yKpMk+0ddkpS2TOy9/GjaWoAUeN3j+0SrMG3a6Lig8s
-# E0jU2/BpVGKEe3UuyM1gjrjkqWxsfw2oeUIKCaDUYE1cvT3s5nVUykvXodROP3Rm
-# wI5txgKdQPjSfiuIuhmCJJwiRU6PrUgMQFZLVhMbBJ771z7/hxULgZbiucc4xaX5
-# J1VPXt8GqVQGA9M9W/0ER9UXaQFFRl9Ts8DB8khMr8IYB+BDriGzrsR6kP6KAibX
-# EIoZ71iNkkBOzxp2knPMEhIQx4oM3GGcmEgPA2hIabyo
+# MjIwNDEwMDk0MTEyWjA/BgkqhkiG9w0BCQQxMgQwVJ5fpyTmG8UqFf+Y8tC3/Igp
+# msx4hQg3JA7o4GuHOePezWAE4ZsguYGkia06pJElMA0GCSqGSIb3DQEBAQUABIIC
+# ABpbgnCMTsIfFnYbebpL2I4iyqE8Q7cU+nQNw/VaDwoh3Ax73hqJMWWL4O+xS7VX
+# I1TY8qkE0RK7x3WR+jCUPLxbEGkEbiY+TQNWk58F5N0zsxQAV4v3AZIezKp1INFO
+# HI4D0FO/XDGKQcEgg/KhX2sZ3Cha725hMv1KyH+Rtlg6rGIQwZ7dEQWVpk4FYzbj
+# EQmnJrqLMQfxtIVvYRuuvhK9Age8Hhw0KP37kP9S968lo+4O/P6VwpsmIvwgssGh
+# 7NwrRTSWjkpDOwEp0O/zpxuZptfGrnZkx4w+E9jBViIQHPhK874Q2xDSezC6SC6E
+# 2ALehN4+fPYGSWnYlV2GlalvBmWhivL6RLJ58pj/fp9U0KpvuYn+MXgN15oGw+ev
+# 7E5DGDdEZpw9eCI7GYYoWdSUmDXntJbCGeTQTfLNOKF0Ffe/6fPk/7MeUKNrmKRe
+# 47KmWyuUNniE/uJE47dzZFH5jkOmuxOse45dPZo4rtj/FkOcvKpbNwIQ7gkxKXyd
+# QTE2LAL2dw8KUGJftZdppOL9y9MSHzvApO0K6kqChdjbRgorqAl/k/KEIpNhSU5S
+# sDU/m6+fjJKfgq4YlJAtNmD5hK/VyrHq8Lum8wMqiBa4fCnEB9HPnBkBHYuKsB8n
+# fLOPlcdLtY35GUsUvG9ch3fA8SWvzrBegMvkl78dnjhK
 # SIG # End signature block
