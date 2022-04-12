@@ -1553,7 +1553,7 @@ function Stop-GUIApplication {
                 Stop-Process -Id $PID
             } elseif ($Console) {
                 # return to console
-                [Win32.Functions]::ShowWindow($hWnd, $SW_SHOW)
+                try { $Null = [Win32.Functions]::ShowWindow($hWnd, $SW_SHOW) } catch { <# nothing #> }
             }
             Write-Verbose "OTP4ADC Ended!"
             exit $ExitCode
@@ -3113,7 +3113,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
         $TypeDef = '[DllImport("User32.dll")]public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'
         Add-Type -MemberDefinition $TypeDef -Namespace Win32 -Name Functions
         $hWnd = (Get-Process -Id $PID).MainWindowHandle
-        $Null = [Win32.Functions]::ShowWindow($hWnd, $SW_HIDE)
+        try { $Null = [Win32.Functions]::ShowWindow($hWnd, $SW_HIDE) } catch { <# nothing #> }
     }
 
     $SyncHash = [hashtable]::Synchronized(@{ })
@@ -3721,13 +3721,13 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                VerticalContentAlignment="Center"
                                Width="Auto"
                                Margin="2"
-                               Content="Change Secret" />
+                               Content="Disable change Secret" />
                         <CheckBox Name="cbChangeSecretDisabled"
                                   Grid.Row="2"
                                   Grid.Column="1"
                                   VerticalContentAlignment="Center"
                                   Margin="2"
-                                  Content="Disabled"
+                                  Content=""
                                   ToolTip="If unchecked you are allowed to edit or change the secret manually. (Default:Checked)"
                                   TabIndex="100"
                                   IsChecked="True" />
@@ -4997,8 +4997,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                 [Parameter(Mandatory)][Windows.Controls.SelectionChangedEventArgs]$e
             )
             if ($SyncedVariables.SettingsChanged -and ($sender.SelectedItem.Header -ne "Settings")) {
-                $continueWithoutSaving = Invoke-SettingsChangedQuestion
-                if (-Not $continueWithoutSaving) {
+                if (-Not (Invoke-SettingsChangedQuestion)) {
                     $SyncHash.WPFControl_tcOTP4ADC.SelectedIndex = 1
                 }
             }
@@ -5018,8 +5017,8 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # SIG # Begin signature block
 # MIITYgYJKoZIhvcNAQcCoIITUzCCE08CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBTYNWkol6LigOe
-# QoTzoDGVBonmlCIUiFUP2pxpCJdQIqCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAsnycbFN0YERgD
+# VcEUMa115X9TJ7jkifUeCCxaZQwyhKCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
 # i/247uUvWN5TMA0GCSqGSIb3DQEBCwUAMHwxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # ExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoT
 # D1NlY3RpZ28gTGltaXRlZDEkMCIGA1UEAxMbU2VjdGlnbyBSU0EgQ29kZSBTaWdu
@@ -5113,11 +5112,11 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # IFNpZ25pbmcgQ0ECECwnTfNkELSL/bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQw
 # GAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGC
 # NwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQx
-# IgQg/Dv2YBBq7iHwu5eQq7tY85YT15GYgGouW/M//gTXF7swDQYJKoZIhvcNAQEB
-# BQAEggEAJSEjKAvkgtSk/OijhOBTn6otkQiTP5OSUD/5I1QkJ+bKb70JhqcmPkzn
-# AjdIXQwFdhebpNj+aT0HDr4u2nTeVuTWkFOsmv+pUfPmKidFGZCbcss/6d3Cqw5z
-# xp3BZh7jmZL2P/qsT5cmVezZl5M6KR5lXJWFQFN6MyQLOPtLrhqP/ahaImTjOZNR
-# 1poZ2MU5pnH/xFPU2YgWd88GvIVq4qQA/IiJckbl9yE9pBN5NeQ4BxlgrXr5AzBp
-# 9VVoO+YcD9cVEM/ttyb8Mrg7hteJhh2sM3C4fvCyAyJhPYoBsahpmB+hAxj+1MGJ
-# nOW8xDX39jHjXXmnGoNSa34FufIwqQ==
+# IgQgJIJcVQfwBiOicuWPPv5i9Zpe46HqbeVIL6sMHGOs8f4wDQYJKoZIhvcNAQEB
+# BQAEggEAJojzqqB7nTmwz4VzTGJAp8wi/EME+U5UXZyO+eThGll+By3F80nNjdMv
+# uWcpYzGHFLFaX6XkLKhpBu9EkkC7reVcfPyaxE5mEWMU/fwGppioxLdLSwRK2fnL
+# cIQGyLtXVyaEQspp+tzINmU7mwCNG6tx1D4T531TeOv/1/txP52InOheNK5xk93f
+# qdPGMm49KYAasZcT7BQf/gHWywXzOyXzmHVRVIuAYIE6OAeRNc4lwxZwfrqw0HZb
+# hVNcZ6m3rneyD40RrZhJYrHg1YxgC93yLlbVsthEMS23OSScdHanr5/xI4XR2BpN
+# mwY/Ulr2UrYzfbjXhASNRDAMyN2P1g==
 # SIG # End signature block
