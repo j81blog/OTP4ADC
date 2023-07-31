@@ -18,6 +18,9 @@ C:\OTP4ADC\OTP4ADC.ps1 -GatewayURI <String> -Attribute <String> -Username <Strin
 # CLI: Edit one user with specifying your own secret
 C:\OTP4ADC\OTP4ADC.ps1 -GatewayURI <String> -Attribute <String> -Username <String> -DeviceName <String> -Secret <String> [-QRSize <Int32>] [-TokenText <String>] [-ReplaceTokens] [-Thumbprint <String>]
 
+# CLI: Edit one user while having no write permissions to AD
+C:\OTP4ADC\OTP4ADC.ps1 -NoAD -GatewayURI <String> -Username <String> -DeviceName <String> -ExportPath <String> [-QRSize <Int32>] [-TokenText <String>] [-Thumbprint <String>]
+
 #CLI: Bulk import a CSV (with or without specifying your own secret)
 C:\OTP4ADC\OTP4ADC.ps1 -GatewayURI <String> -Attribute <String> -CsvPath <FileInfo> [-Delimiter <String>] [-ExportPath <String>] [-QRSize <Int32>] [-TokenText <String>] [-ReplaceTokens] [-Thumbprint <String>]
 ```
