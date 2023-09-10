@@ -73,7 +73,7 @@
 
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v1.1.0
+    Version   : v1.1.1
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -174,7 +174,7 @@ Param(
     [String]$Delimiter = ","
 )
 
-$AppVersion = "v1.1.0"
+$AppVersion = "v1.1."
 
 #region functions
 
@@ -1023,7 +1023,6 @@ function Set-GUIEncryptionOption {
         "0" {
             if ($SyncHash.WPFControl_tbNewAttribute.IsEnabled -eq $true) { $SyncHash.WPFControl_tbNewAttribute.IsEnabled = $false }
             $SyncHash.WPFControl_tbNewAttribute.Text = ""
-            $Scr
             Break
         }
         "1" {
@@ -2385,6 +2384,7 @@ function Test-CertificatePresent {
             $certificate = Get-CertificateFromStore -Thumbprint $Thumbprint
             Write-Verbose "Certificate info retrieved: $($certificate | Select-Object * | Out-String)"
         } catch {
+            Write-Verbose "Caught an error: $($_.Exception.Message)"
             $ErrorMessage = "Error while retrieving certificate. No valid certificate found, correct thumbprint configured?"
         }
         if ([String]::IsNullOrEmpty($certificate.SerialNumber)) {
@@ -4714,6 +4714,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                 }
                 #validate encryption settings
                 if ([String]::IsNullOrEmpty($($SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text)) -and ($SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsChecked -eq $true)) {
+                    Write-Verbose "ERROR: Certificate test failed! The Thumprint box is empty!"
                     $null = [Windows.MessageBox]::Show("Certificate test failed!`r`nThe Thumprint box is empty!", "Error", [Windows.MessageBoxButton]::OK, [Windows.MessageBoxImage]::Error)
                     $failed = $true
                     $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.IsChecked = $false
@@ -4721,6 +4722,7 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                     try {
                         $CertTest = Test-CertificatePresent -Thumbprint $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text
                     } catch {
+                        Write-Verbose "ERROR: Could not perform certificate test, Error message: $CertTest"
                         $CertTest = $_.Exception.Message
                     }
                     if ($CertTest -ne $true) {
@@ -5095,8 +5097,8 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # SIG # Begin signature block
 # MIITYgYJKoZIhvcNAQcCoIITUzCCE08CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAQ9LQMpdt5rso1
-# nAIRRoEIxjm8vvBjs0Bb6Cump0R/qKCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCPIWhkG1VDVWjD
+# rdERneESM1TlJevSZRClhkkw9cKzeaCCEHUwggTzMIID26ADAgECAhAsJ03zZBC0
 # i/247uUvWN5TMA0GCSqGSIb3DQEBCwUAMHwxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # ExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoT
 # D1NlY3RpZ28gTGltaXRlZDEkMCIGA1UEAxMbU2VjdGlnbyBSU0EgQ29kZSBTaWdu
@@ -5190,11 +5192,11 @@ Write-Verbose "Bye, thank you for using OTP4ADC"
 # IFNpZ25pbmcgQ0ECECwnTfNkELSL/bju5S9Y3lMwDQYJYIZIAWUDBAIBBQCggYQw
 # GAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGC
 # NwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQx
-# IgQgtsfBIsVLJdIqLblwMPcwCFKFXwMDSOkh4L1PX+pjapkwDQYJKoZIhvcNAQEB
-# BQAEggEAdi3gcyhpu28NZPQxC4H/seXMe3xGlRe+wVh40u3wYKq7chT2I83YwoGE
-# 2+4259rBK08xcfKGcZr2gyK+UQfz0nyspKSCcrcVN0T6X5E2SWEcJFEz2Dxb4+AB
-# jn3BjUuRU7RifIRPU8Iateu8+2AKddi5NdHHWhIgCVfUPEjUSY39xoCry+VSLcaB
-# TVaABkhzZhoTSdLvkK8n/zDh7Kb+58hP+jalEuwFmJAoJN7/vCUPcqAkphO6SUXQ
-# ti/ht8NioHkfPSR6ER4DN+nanrqLWoQ0RB9ZXrVqsVKKhpoDFY2P27la0Ztltdkk
-# e4PMHWJPPy/jop6z7iPvCLUF4/Te2A==
+# IgQg/RW9L6PI4jAYkJ3YCXAKM0aKWgFACHDpCr5Yb1UkitwwDQYJKoZIhvcNAQEB
+# BQAEggEAAZTto5uieYaBCNZy8CKXwo/DUzwli9yKLa8qQeXEk7LYrq38Cft9t9+J
+# v7H9ToD1Y2UUr33E56MDfP2UdpTBDN5RQbqihVY4LXTR0WsZykwBMD/RezIIbm+3
+# OABvH9kGd2bHtHYj7I4kHAvZlGcYHzuJFPW0YZ37UwlXAvsq/q3bRTuqnFGBUSb4
+# crnYcO66aXnWfJtWwTk5sCU/GdE1B4dbnrix/Do25qR5DepFMrMDCg9vG/li06wm
+# 4c6lfXlosIKek0XxYQNrVCPz6LP88mUyKyugCONEoT2BJOinTuTTf7eKK2t9cL6I
+# J5JBsjN85X0borJjhKkn4SjJCxa+og==
 # SIG # End signature block
