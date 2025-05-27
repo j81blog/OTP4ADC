@@ -73,7 +73,7 @@
 
 .NOTES
     File Name : OTP4ADC.ps1
-    Version   : v1.1.5
+    Version   : v1.1.6
     Author    : John Billekens
     Requires  : PowerShell v5.1 and up
                 Permission to change the user (attribute)
@@ -174,7 +174,7 @@ Param(
     [String]$Delimiter = ","
 )
 
-$AppVersion = "v1.1.5"
+$AppVersion = "v1.1.6"
 
 #region functions
 
@@ -528,6 +528,151 @@ LanguageMode: $($ExecutionContext.SessionState.LanguageMode)
             Write-Debug -Message "Data not written to file!"
         }
     }
+}
+
+function Show-CertificatePicker {
+    [CmdletBinding()]
+    param(
+        [String]$Thumbprint
+    )
+
+    # Load WPF assemblies
+    Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+
+    # Determine if running elevated (Administrator)
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    $isElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+    # Helper: fetch certs from Personal (My) store
+    function Get-StoreCerts {
+        param(
+            [System.Security.Cryptography.X509Certificates.StoreLocation]$Location,
+
+            [Switch]$OnlyWithPrivateKey
+        )
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store "My", $Location
+        try {
+            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+
+            foreach ($cert in $store.Certificates) {
+
+                $alg = $cert.PublicKey.Oid.FriendlyName
+                [string]$keySize = $cert.PublicKey.Key.KeySize
+                if ([String]::IsNullOrEmpty($keySize)) {
+                    $keySize = "N/A"
+                }
+                $cert = [PSCustomObject]@{
+                    Store               = if ($Location -eq [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser) { 'User' } else { 'Machine' }
+                    IssuedTo            = ($cert.Subject -split 'CN=')[-1]
+                    IssuedBy            = ($cert.Issuer -split 'CN=')[-1]
+                    Expiration          = $cert.NotAfter.ToString('yyyy-MM-dd HH:mm:ss')
+                    FriendlyName        = $cert.FriendlyName
+                    PublicKey           = '{0} ({1})' -f $alg, $keySize
+                    PrivateKeyAvailable = $cert.HasPrivateKey
+                    CertificateType     = ($cert.EnhancedKeyUsageList | Select-Object -ExpandProperty FriendlyName) -Join ", "
+                    Thumbprint          = $cert.Thumbprint
+                }
+                if ($OnlyWithPrivateKey.ToBool() -eq $false) {
+                    Write-Output $cert
+                } elseif ($cert.PrivateKeyAvailable) {
+                    Write-Output $cert
+                }
+            }
+        } finally {
+            $store.Close()
+        }
+    }
+
+    # Collect certs
+    $certList = [System.Collections.ArrayList]::new()
+    $certList.AddRange((Get-StoreCerts -Location CurrentUser -OnlyWithPrivateKey)) | Out-Null
+    if ($isElevated) { $certList.AddRange((Get-StoreCerts -Location LocalMachine -OnlyWithPrivateKey)) | Out-Null }
+
+    # Sort: User before Machine, IssuedTo, Expiration
+    $sorted = $certList | Sort-Object @{Expression = { if ($_.Store -eq 'User') { 0 } else { 1 } } }, 'IssuedTo', 'Expiration'
+
+    # Build WPF Window
+    #remove close button from window
+    $window = New-Object System.Windows.Window -Property @{
+        Title = 'Select a Certificate'
+        Width = 600; Height = 400
+        WindowStartupLocation = 'CenterScreen'
+        WindowStyle = 'ToolWindow'
+    }
+    $grid = New-Object System.Windows.Controls.Grid
+    $grid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = '*' }))
+    $grid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = 'Auto' }))
+    $window.Content = $grid
+
+    # DataGrid setup
+    $dg = New-Object System.Windows.Controls.DataGrid -Property @{ ItemsSource = $sorted; AutoGenerateColumns = $false; SelectionMode = 'Single'; IsReadOnly = $true }
+    $columns = @(
+        @{ Header = 'Store'; Binding = 'Store'; Width = 60 },
+        @{ Header = 'Issued To'; Binding = 'IssuedTo'; Width = 150 },
+        @{ Header = 'Issued By'; Binding = 'IssuedBy'; Width = 150 },
+        @{ Header = 'Expiration'; Binding = 'Expiration'; Width = 120 },
+        @{ Header = 'Friendly Name'; Binding = 'FriendlyName'; Width = 120 },
+        @{ Header = 'Public Key'; Binding = 'PublicKey'; Width = 70 },
+        @{ Header = 'Private Key'; Binding = 'PrivateKeyAvailable'; Width = 70 },
+        @{ Header = 'Certificate Type'; Binding = 'CertificateType'; Width = 150 },
+        @{ Header = 'Thumbprint'; Binding = 'Thumbprint'; Width = 250 }
+    )
+    foreach ($colDef in $columns) {
+        $col = New-Object System.Windows.Controls.DataGridTextColumn
+        $col.Header = $colDef.Header
+        $col.Binding = New-Object System.Windows.Data.Binding($colDef.Binding)
+        $col.Width = $colDef.Width
+        $dg.Columns.Add($col)
+    }
+    [System.Windows.Controls.Grid]::SetRow($dg, 0)
+    $grid.Children.Add($dg) | Out-Null
+
+    # Buttons
+    $btnPanel = New-Object System.Windows.Controls.StackPanel -Property @{ Orientation = 'Horizontal'; HorizontalAlignment = 'Right'; Margin = [System.Windows.Thickness]::new(0, 5, 5, 5) }
+    $btnSelect = New-Object System.Windows.Controls.Button -Property @{ Content = 'Select'; Width = 75; IsEnabled = $false; Margin = [System.Windows.Thickness]::new(5, 0, 0, 0) }
+    $btnCancel = New-Object System.Windows.Controls.Button -Property @{ Content = 'Cancel'; Width = 75; Margin = [System.Windows.Thickness]::new(5, 0, 0, 0) }
+    $btnPanel.Children.Add($btnSelect) | Out-Null
+    $btnPanel.Children.Add($btnCancel) | Out-Null
+    [System.Windows.Controls.Grid]::SetRow($btnPanel, 1)
+    $grid.Children.Add($btnPanel) | Out-Null
+
+    # Selection handling
+    $btnSelect.Add_Click({
+            $Script:thumbResult = $dg.SelectedItem.Thumbprint
+            $window.Close()
+        }
+    )
+    $btnCancel.Add_Click({
+            if (-Not [String]::IsNullOrEmpty($Thumbprint)) {
+                $Script:thumbResult = $Thumbprint
+            } else {
+                $Script:thumbResult = $null
+            }
+            $window.Close()
+        }
+    )
+    $window.Add_Closing({
+            if (-Not [String]::IsNullOrEmpty($Thumbprint) -and $null -eq $Script:thumbResult) {
+                $Script:thumbResult = $Thumbprint
+            }
+        }
+    )
+
+    $dg.Add_SelectionChanged({
+            $btnSelect.IsEnabled = $null -ne $dg.SelectedItem
+        }
+    )
+    if (-Not [String]::IsNullOrEmpty($Thumbprint)) {
+        $dg.SelectedItem = $sorted | Where-Object { $_.Thumbprint -eq $Thumbprint }
+        $btnSelect.IsEnabled = $null -ne $dg.SelectedItem
+    } else {
+        $btnSelect.IsEnabled = $false
+    }
+
+
+    # Show dialog
+    $window.ShowDialog() | Out-Null
+    return $Script:thumbResult
 }
 
 function New-QRTOTPImage {
@@ -978,20 +1123,24 @@ function Set-GUIEncryptionOperation {
         "0" {
             if ($SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled -eq $true) {
                 $SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled = $false
+                $SyncHash.WPFControl_btnSelectCurrentCertificateThumbprint.IsEnabled = $false
             }
             $SyncHash.WPFControl_tbCurrentCertificateThumbprint.Text = ""
             if ($SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled -eq $false) {
                 $SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled = $true
+                $SyncHash.WPFControl_btnSelectNewCertificateThumbprint.IsEnabled = $true
             }
             Break
         }
         "1" {
             if ($SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled -eq $false) {
                 $SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled = $true
+                $SyncHash.WPFControl_btnSelectCurrentCertificateThumbprint.IsEnabled = $true
             }
             $SyncHash.WPFControl_tbCurrentCertificateThumbprint.Text = $SyncedVariables.Settings.LDAPSettings.EncryptionCertificateThumbprint
             if ($SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled -eq $true) {
                 $SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled = $false
+                $SyncHash.WPFControl_btnSelectNewCertificateThumbprint.IsEnabled = $false
             }
             $SyncHash.WPFControl_tbNewCertificateThumbprint.Text = ""
             Break
@@ -999,9 +1148,11 @@ function Set-GUIEncryptionOperation {
         "2" {
             if ($SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled -eq $false) {
                 $SyncHash.WPFControl_tbCurrentCertificateThumbprint.IsEnabled = $true
+                $SyncHash.WPFControl_btnSelectCurrentCertificateThumbprint.IsEnabled = $true
             }
             if ($SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled -eq $false) {
                 $SyncHash.WPFControl_tbNewCertificateThumbprint.IsEnabled = $true
+                $SyncHash.WPFControl_btnSelectNewCertificateThumbprint.IsEnabled = $true
             }
             Break
         }
@@ -1075,18 +1226,13 @@ function Set-GUISettingsEncryptionOptionEnabled {
         [Bool]$IsEnabled = $true
     )
     Write-Verbose "Starting function : Set-GUISettingsEncryptionOptionEnabled [IsEnabled:$IsEnabled]"
-    if (($SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.IsEnabled -ne $IsEnabled) -or ($SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.Visibility -eq "Hidden") ) {
-        $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.IsEnabled = $IsEnabled
-        $SyncHash.WPFControl_lblSecretEncryptionCertificateThumbprint.IsEnabled = $IsEnabled
-        $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.IsEnabled = $IsEnabled
-        if ($IsEnabled) {
-            $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.Visibility = "Visible"
-            Invoke-GUISettingsRetrieveCertificates
-        } else {
-            $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.Visibility = "Hidden"
-            Invoke-GUISettingsRetrieveCertificates -Blank
-        }
-
+    if ($SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.IsEnabled -ne $IsEnabled) {
+    }
+    if ($SyncHash.WPFControl_btnSelectSecretEncryptionCertificateThumbprint.IsEnabled -ne $IsEnabled) {
+    }
+    if ($SyncHash.WPFControl_lblSecretEncryptionCertificateThumbprint.IsEnabled -ne $IsEnabled) {
+    }
+    if ($SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.IsEnabled -ne $IsEnabled) {
     }
     Write-Verbose "Ending function   : Set-GUISettingsEncryptionOptionEnabled"
 }
@@ -1387,11 +1533,13 @@ function Set-GUISettingsEncryption {
     switch ($Setting) {
         $true {
             $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.IsEnabled = $true
+            $SyncHash.WPFControl_btnSelectSecretEncryptionCertificateThumbprint.IsEnabled = $true
             Break
         }
         $false {
             $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = ""
             $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.IsEnabled = $false
+            $SyncHash.WPFControl_btnSelectSecretEncryptionCertificateThumbprint.IsEnabled = $false
             Break
         }
         Default {
@@ -1401,24 +1549,6 @@ function Set-GUISettingsEncryption {
     Write-Verbose "Ending function   : Set-GUISettingsEncryption"
 }
 
-function Invoke-GUISettingsRetrieveCertificates {
-    [CmdLetBinding()]
-    param(
-        [Switch]$Blank
-    )
-    Write-Verbose "Starting function : Invoke-GUISettingsRetrieveCertificates [Blank:$($Blank.ToBool())]"
-    if ($Blank) {
-        $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.ItemsSource = @()
-    } else {
-        $SyncedVariables.CertificatesRetrieving = $true
-        $SyncedVariables.Certificates = @(Get-AllCertificatesFromStore)
-        Write-Verbose "$($SyncedVariables.Certificates)"
-        $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.ItemsSource = $SyncedVariables.Certificates
-        $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.SelectedIndex = -1
-        $SyncedVariables.CertificatesRetrieving = $false
-    }
-    Write-Verbose "Ending function   : Invoke-GUISettingsRetrieveCertificates"
-}
 function Import-GUISettings {
     [CmdletBinding()]
     param (
@@ -1511,8 +1641,6 @@ function Import-GUISettings {
     }
     $SyncedVariables.Settings.AppVersion = $Script:AppVersion
     if ($SyncedVariables.Settings.LDAPSettings.EncryptionEnabled) {
-        Invoke-GUISettingsRetrieveCertificates
-
         try {
             $CertTest = Test-CertificatePresent -Thumbprint $SyncedVariables.Settings.LDAPSettings.SecretEncryptionCertificateThumbprint
             if ($CertTest -ne $true) {
@@ -1525,11 +1653,11 @@ function Import-GUISettings {
         }
     } else {
         $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = $null
-        Invoke-GUISettingsRetrieveCertificates -Blank
     }
     Update-GUI
     Write-Verbose "Ending function   : Import-GUISettings"
 }
+
 function ConvertTo-PlainText {
     [CmdletBinding()]
     param    (
@@ -3967,6 +4095,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="135" />
                                 <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <Label Name="lblLDAPSecretEncryptionEnabled"
                                    Grid.Row="1"
@@ -3991,6 +4120,15 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                    VerticalContentAlignment="Center"
                                    Margin="2"
                                    Content="Certificate Thumbprint" />
+                            <Button Name="btnSelectSecretEncryptionCertificateThumbprint"
+                                    Grid.Row="2"
+                                    Grid.Column="2"
+                                    Width="100"
+                                    VerticalContentAlignment="Center"
+                                    Margin="2"
+                                    Content="Select Certificate"
+                                    TabIndex="165"
+                                    ToolTip="Select a certificate to encrypt the secret" />
                             <TextBox Name="tbSecretEncryptionCertificateThumbprint"
                                      Grid.Row="2"
                                      Grid.Column="1"
@@ -4001,39 +4139,7 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                      TabIndex="170"
                                      Width="Auto"
                                      ToolTip="Certificate thumbprint to decrypt the secret" />
-                            <ListView Name="lbSelectSecretEncryptionCertificateThumbprint"
-                                      Grid.Row="3"
-                                      Margin="2"
-                                      Grid.Column="1"
-                                      MaxWidth="424"
-                                      MinHeight="70"
-                                      MaxHeight="150"
-                                      FontSize="8"
-                                      TabIndex="175"
-                                      SelectionMode="Single">
-                                <ListView.View>
-                                <GridView>
-                                        <GridViewColumn Header="Subject"
-                                                        DisplayMemberBinding="{Binding Subject}"
-                                                        Width="Auto" />
-                                        <GridViewColumn Header="ExpiryDate"
-                                                        DisplayMemberBinding="{Binding ExpiryDate}"
-                                                        Width="Auto" />
-                                        <GridViewColumn Header="PrivateKey"
-                                                        DisplayMemberBinding="{Binding PrivateKey}"
-                                                        Width="Auto" />
-                                        <GridViewColumn Header="Issuer"
-                                                        DisplayMemberBinding="{Binding Issuer}"
-                                                        Width="Auto" />
-                                        <GridViewColumn Header="SerialNumber"
-                                                        DisplayMemberBinding="{Binding SerialNumber}"
-                                                        Width="Auto" />
-                                        <GridViewColumn Header="Thumbprint"
-                                                        DisplayMemberBinding="{Binding Thumbprint}"
-                                                        Width="Auto" />
-                                    </GridView>
-                                </ListView.View>
-                            </ListView>
+
                         </Grid>
                     </GroupBox>
                 </Grid>
@@ -4161,6 +4267,14 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                      Text=""
                                      TabIndex="51"
                                      ToolTip="Current certificate thumbprint to decrypt the secret with" />
+                            <Button Name="btnSelectCurrentCertificateThumbprint"
+                                    Grid.Row="4"
+                                    Grid.Column="3"
+                                    VerticalContentAlignment="Center"
+                                    Margin="2"
+                                    Content="Select Certificate"
+                                    TabIndex="52"
+                                    ToolTip="Select a certificate to decrypt the secret" />
                             <Label Name="lblNewCertificateThumbprint"
                                    Grid.Row="5"
                                    Grid.Column="0"
@@ -4168,6 +4282,14 @@ if (($PsCmdlet.ParameterSetName -eq "CommandLine") -or ($PsCmdlet.ParameterSetNa
                                    Margin="2"
                                    Content="New Certificate"
                                    Grid.ColumnSpan="2" />
+                            <Button Name="btnSelectNewCertificateThumbprint"
+                                    Grid.Row="5"
+                                    Grid.Column="3"
+                                    VerticalContentAlignment="Center"
+                                    Margin="2"
+                                    Content="Select Certificate."
+                                    TabIndex="62"
+                                    ToolTip="Select a certificate to encrypt the secret" />
                             <TextBox Name="tbNewCertificateThumbprint"
                                      Grid.Row="5"
                                      Grid.Column="2"
@@ -4798,6 +4920,18 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         [Windows.Controls.CheckBox]::CheckedEvent, $Script:EncryptionEnabledCheckedEventHandler
     )
 
+    $SyncHash.WPFControl_btnSelectSecretEncryptionCertificateThumbprint.Add_Click({
+            # btnSelectSecretEncryptionCertificateThumbprint Click Action
+            param(
+                [Parameter(Mandatory)][Object]$sender,
+                [Parameter(Mandatory)][Windows.RoutedEventArgs]$e
+            )
+            Write-Verbose "btnSelectSecretEncryptionCertificateThumbprint Click"
+            $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = Show-CertificatePicker -Thumbprint "$($SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text)"
+            Update-Gui
+        }
+    )
+
     $SyncHash.WPFControl_cbLDAPSecretEncryptionEnabled.AddHandler(
         # Add unchecked event
         [Windows.Controls.CheckBox]::UnCheckedEvent, $Script:EncryptionEnabledCheckedEventHandler
@@ -5036,17 +5170,16 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
         }
     )
 
-    #lbSelectSecretEncryptionCertificateThumbprint
-    $SyncHash.WPFControl_lbSelectSecretEncryptionCertificateThumbprint.Add_SelectionChanged(
+    $SyncHash.WPFControl_btnSelectCurrentCertificateThumbprint.Add_Click(
         {
+            # btnSelectCurrentCertificateThumbprint Click Action
             param(
                 [Parameter(Mandatory)][Object]$sender,
-                [Parameter(Mandatory)][Windows.Controls.SelectionChangedEventArgs]$e
+                [Parameter(Mandatory)][Windows.RoutedEventArgs]$e
             )
-            Write-Verbose "$($sender.SelectedItem.Thumbprint)"
-            if (-Not ($SyncedVariables.CertificatesRetrieving -eq $true)) {
-                $SyncHash.WPFControl_tbSecretEncryptionCertificateThumbprint.Text = $sender.SelectedItem.Thumbprint
-            }
+            Write-Verbose "btnSelectCurrentCertificateThumbprint Click"
+            $SyncHash.WPFControl_tbCurrentCertificateThumbprint.Text = Show-CertificatePicker -Thumbprint "$($SyncHash.WPFControl_tbCurrentCertificateThumbprint.Text)"
+            Update-Gui
         }
     )
 
@@ -5070,6 +5203,19 @@ iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8
                 $this.SelectionStart = $cursorPos
             }
             $this.SelectionLength = 0
+        }
+    )
+
+    $SyncHash.WPFControl_btnSelectNewCertificateThumbprint.Add_Click(
+        {
+            # btnSelectNewCertificateThumbprint Click Action
+            param(
+                [Parameter(Mandatory)][Object]$sender,
+                [Parameter(Mandatory)][Windows.RoutedEventArgs]$e
+            )
+            Write-Verbose "btnSelectNewCertificateThumbprint Click"
+            $SyncHash.WPFControl_tbNewCertificateThumbprint.Text = Show-CertificatePicker -Thumbprint "$($SyncHash.WPFControl_tbNewCertificateThumbprint.Text)"
+            Update-Gui
         }
     )
 
